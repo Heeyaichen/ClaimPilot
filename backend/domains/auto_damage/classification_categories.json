@@ -1,0 +1,24 @@
+{
+  "categories": [
+    {
+      "name": "AUTO_PHYSICAL_DAMAGE",
+      "description": "Repairable vehicle damage from collision or incident",
+      "routing_agent": "extractor_agent"
+    },
+    {
+      "name": "TOTAL_LOSS",
+      "description": "Damage estimated > 75% of vehicle ACV, or vehicle not recoverable",
+      "routing_agent": "extractor_agent"
+    },
+    {
+      "name": "THEFT",
+      "description": "Vehicle stolen (partial or complete), without collision",
+      "routing_agent": "extractor_agent"
+    },
+    {
+      "name": "LIABILITY",
+      "description": "Third-party bodily injury or property damage claim",
+      "routing_agent": "extractor_agent"
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "damage_indicators": {
+    "type": "array",
+    "items": {
+      "type": "object",
+      "properties": {
+        "panel": {"type": "string", "enum": ["front", "rear", "driver_side", "passenger_side", "roof", "undercarriage"]},
+        "severity": {"type": "string", "enum": ["minor", "moderate", "severe", "total_loss_candidate"]},
+        "description": {"type": "string"}
+      }
+    }
+  },
+  "vehicle_identification": {
+    "type": "object",
+    "properties": {
+      "make": {"type": "string"},
+      "model": {"type": "string"},
+      "year": {"type": "integer", "nullable": true},
+      "color": {"type": "string"},
+      "license_plate_visible": {"type": "boolean"},
+      "license_plate_value": {"type": "string", "nullable": true}
+    }
+  },
+  "scene_conditions": {
+    "type": "object",
+    "properties": {
+      "time_of_day_estimated": {"type": "string"},
+      "weather_conditions": {"type": "string"},
+      "location_type": {"type": "string", "enum": ["road", "parking_lot", "private_property", "highway", "unknown"]}
+    }
+  },
+  "forensic_flags": {
+    "type": "array",
+    "description": "Anomalies inconsistent with stated accident type",
+    "items": {"type": "string"}
+  }
+}
