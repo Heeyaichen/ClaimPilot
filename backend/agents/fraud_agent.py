@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import logging
+import typing
 from typing import Any
 
 from backend.agents.base import AgentResponseError, FoundryAgentClient
 from backend.models.claim import FraudRiskScore
+
+if typing.TYPE_CHECKING:
+    from backend.services.search import SearchService
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +65,11 @@ FRAUD_HIGH = 0.7
 class FraudDetectionAgent:
     """Analyzes claim evidence for fraud risk signals."""
 
-    def __init__(self, client: FoundryAgentClient | None = None) -> None:
+    def __init__(
+        self,
+        client: FoundryAgentClient | None = None,
+        search_service: SearchService | None = None,
+    ) -> None:
         from backend.core.config import get_settings
 
         settings = get_settings()
@@ -69,6 +77,7 @@ class FraudDetectionAgent:
             agent_id=settings.fraud_agent_id or None,
         )
         self._use_stubs = settings.use_stub_agents
+        self._search = search_service
 
     def assess(
         self,
@@ -91,12 +100,22 @@ class FraudDetectionAgent:
         if self._use_stubs:
             return self._stub_assess()
 
-        context = {
+        context: dict[str, Any] = {
             "extracted_fields": extracted_fields,
             "image_analysis": image_analysis,
             "voice_transcript": voice_transcript,
             "classification": classification,
         }
+
+        # Enrich with prior claims from Azure Search
+        if self._search and extracted_fields:
+            prior_claims = self._search.search_prior_claims(
+                policy_number=extracted_fields.get("policy_number"),
+                vin=extracted_fields.get("vin"),
+                policy_holder_name=extracted_fields.get("applicant_name"),
+            )
+            if prior_claims:
+                context["prior_claims"] = prior_claims
 
         prompt = (
             "Analyze the following claim evidence for fraud risk indicators.\n"
