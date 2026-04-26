@@ -1,4 +1,4 @@
-"""Claim pipeline models — state machine, step tracking, API request/response."""
+"""Claim pipeline models — state machine, step tracking, agent outputs, API request/response."""
 
 from __future__ import annotations
 
@@ -25,15 +25,16 @@ class ClaimStatus(StrEnum):
 
 
 class PipelineStep(StrEnum):
-    """The 7 visible pipeline steps, in execution order."""
+    """Pipeline steps in execution order — 8 steps total."""
 
     CLAIM_RECEIVED = "CLAIM_RECEIVED"
     INGEST_DOCUMENT = "INGEST_DOCUMENT"
     INGEST_IMAGES = "INGEST_IMAGES"
     INGEST_VOICE = "INGEST_VOICE"
-    CLASSIFY_STUB = "CLASSIFY_STUB"
-    EXTRACT_VALIDATE_STUB = "EXTRACT_VALIDATE_STUB"
-    DECIDE_STUB = "DECIDE_STUB"
+    CLASSIFY = "CLASSIFY"
+    EXTRACT_VALIDATE = "EXTRACT_VALIDATE"
+    FRAUD_SCREENING = "FRAUD_SCREENING"
+    DECIDE = "DECIDE"
 
 
 class StepStatus(StrEnum):
@@ -52,10 +53,80 @@ STEP_TO_CLAIM_STATUS: dict[PipelineStep, ClaimStatus] = {
     PipelineStep.INGEST_DOCUMENT: ClaimStatus.INGESTING,
     PipelineStep.INGEST_IMAGES: ClaimStatus.INGESTING,
     PipelineStep.INGEST_VOICE: ClaimStatus.INGESTING,
-    PipelineStep.CLASSIFY_STUB: ClaimStatus.CLASSIFYING,
-    PipelineStep.EXTRACT_VALIDATE_STUB: ClaimStatus.EXTRACTING,
-    PipelineStep.DECIDE_STUB: ClaimStatus.DECIDING,
+    PipelineStep.CLASSIFY: ClaimStatus.CLASSIFYING,
+    PipelineStep.EXTRACT_VALIDATE: ClaimStatus.EXTRACTING,
+    PipelineStep.FRAUD_SCREENING: ClaimStatus.FRAUD_SCREENING,
+    PipelineStep.DECIDE: ClaimStatus.DECIDING,
 }
+
+TOTAL_PIPELINE_STEPS = len(PipelineStep)
+
+
+# --- Agent output models ---
+
+
+class ClaimClassification(BaseModel):
+    """Output of the ClassifierAgent."""
+
+    claim_type: str = Field(description="AUTO_PHYSICAL_DAMAGE | TOTAL_LOSS | THEFT | LIABILITY")
+    confidence: float = Field(ge=0.0, le=1.0)
+    routing_rationale: str
+    requires_human_review: bool = False
+    review_reason: str | None = None
+
+
+class ExtractedClaimFields(BaseModel):
+    """Output of the ExtractorAgent."""
+
+    policy_number: str | None = None
+    applicant_name: str | None = None
+    loss_date: str | None = None
+    loss_description: str | None = None
+    vehicle_make: str | None = None
+    vehicle_model: str | None = None
+    vehicle_year: int | None = None
+    vin: str | None = None
+    estimated_repair_amount: float | None = None
+    deductible: float | None = None
+    coverage_limit: float | None = None
+    policy_expiry: str | None = None
+    fields_extracted: int = 0
+    validation_flags: list[str] = Field(default_factory=list)
+    confidence: float = Field(ge=0.0, le=1.0, default=0.0)
+
+
+class FraudRiskScore(BaseModel):
+    """Output of the FraudDetectionAgent."""
+
+    score: float = Field(ge=0.0, le=1.0)
+    signals: dict[str, float] = Field(
+        default_factory=dict, description="signal_name -> individual score"
+    )
+    flags: list[str] = Field(default_factory=list, description="anomaly descriptions")
+    recommendation: str = Field(description="proceed | adjuster_review | escalate_siu")
+
+
+class ReasoningStep(BaseModel):
+    """Single step in the decision reasoning chain."""
+
+    step: str
+    conclusion: str
+    evidence_source: str
+    evidence_value: str | float | bool
+
+
+class AdjudicationDecision(BaseModel):
+    """Output of the DecisionAgent."""
+
+    decision: str = Field(description="APPROVE | REJECT | ESCALATE")
+    confidence: float = Field(ge=0.0, le=1.0)
+    approved_amount: float | None = None
+    rejection_reason: str | None = None
+    escalation_reason: str | None = None
+    reasoning_chain: list[ReasoningStep] = Field(default_factory=list)
+
+
+# --- Pipeline state models ---
 
 
 class PipelineStepState(BaseModel):
@@ -91,6 +162,7 @@ class ClaimRecord(BaseModel):
     voice_transcript: dict[str, Any] | None = None
     classification_result: dict[str, Any] | None = None
     extraction_result: dict[str, Any] | None = None
+    fraud_result: dict[str, Any] | None = None
     decision_result: dict[str, Any] | None = None
 
     # Metadata
@@ -120,7 +192,7 @@ class ClaimStatusResponse(BaseModel):
     claim_id: str
     status: ClaimStatus
     current_step: str
-    total_steps: int = 7
+    total_steps: int = TOTAL_PIPELINE_STEPS
     steps: list[PipelineStepState] = Field(default_factory=list)
     submitted_at: datetime
     updated_at: datetime
