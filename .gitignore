@@ -41,10 +41,15 @@ evaluation/datasets/acord_synthetic/forms/
 evaluation/datasets/acord_synthetic/labels/
 evaluation/datasets/acord_synthetic/training/
 
-# Bicep compiled output
+# Bicep compiled output (but allow specific JSON files)
 *.json
 !backend/domains/auto_damage/*.json
 !evaluation/datasets/acord_synthetic/README.md
+!frontend/package.json
+!frontend/package-lock.json
+!frontend/tsconfig.json
+!frontend/src/**/*.json
+!frontend/next-env.d.ts
 
 # Node (for future frontend)
 node_modules/
@@ -53,3 +58,9 @@ out/
 
 # Azure Functions local settings
 local.settings.json
+
+# Agent instructions (not committed)
+AGENTS.md
+CLAUDE.md
+frontend/AGENTS.md
+frontend/CLAUDE.md
