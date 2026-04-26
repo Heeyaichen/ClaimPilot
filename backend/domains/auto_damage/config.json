@@ -1,0 +1,17 @@
+{
+  "domain": "auto_damage",
+  "version": "1.0.0",
+  "classification_threshold": 0.75,
+  "fraud_score_thresholds": {
+    "low": 0.4,
+    "medium": 0.7
+  },
+  "decision_confidence_threshold": 0.80,
+  "supported_form_types": ["ACORD_1", "ACORD_2"],
+  "max_images_per_claim": 10,
+  "max_audio_duration_seconds": 300,
+  "supported_languages": [
+    "en-US", "es-ES", "fr-FR", "de-DE", "zh-CN",
+    "ja-JP", "ko-KR", "pt-BR", "ar-SA", "hi-IN"
+  ]
+}
