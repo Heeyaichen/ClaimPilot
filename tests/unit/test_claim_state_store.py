@@ -58,7 +58,7 @@ def test_create_claim_initializes_steps():
 
     result = store.create_claim(record)
 
-    assert len(result.steps) == 7
+    assert len(result.steps) == 8
     assert all(s.status == StepStatus.PENDING for s in result.steps)
     mock_container.upsert_item.assert_called_once()
 
@@ -96,9 +96,9 @@ def test_update_step_completed_with_output():
     store, mock_container = _make_store()
 
     output = {"claim_type": "AUTO", "confidence": 0.95}
-    result = store.update_step("c3", PipelineStep.CLASSIFY_STUB, StepStatus.COMPLETED, output=output)
+    result = store.update_step("c3", PipelineStep.CLASSIFY, StepStatus.COMPLETED, output=output)
     assert result is not None
-    step = [s for s in result.steps if s.step == PipelineStep.CLASSIFY_STUB][0]
+    step = [s for s in result.steps if s.step == PipelineStep.CLASSIFY][0]
     assert step.status == StepStatus.COMPLETED
     assert step.output == output
     assert step.completed_at is not None

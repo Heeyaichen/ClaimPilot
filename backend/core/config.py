@@ -49,11 +49,14 @@ class Settings(BaseSettings):
     azure_foundry_project_endpoint: str = ""
     foundry_model_deployment: str = "gpt-5-4"
 
-    # Agent IDs (Phase 2+)
+    # Agent IDs (Phase 3)
     classifier_agent_id: str = ""
     extractor_agent_id: str = ""
     fraud_agent_id: str = ""
     decision_agent_id: str = ""
+
+    # Stub mode — only for local dev, never silently in production
+    use_stub_agents: bool = False
 
 
 def get_settings() -> Settings:
