@@ -491,12 +491,12 @@ python backend/services/document_intelligence.py --train --dataset evaluation/da
 
 ```bash
 # Terminal 1: Backend (FastAPI dev server)
-uvicorn backend.api.main:app --reload --port 8000
+uvicorn backend.api.app:app --reload --port 8000
 
 # Terminal 2: Frontend
 cd frontend && npm run dev
 
-# Terminal 3: Durable Functions (local emulation)
+# Terminal 3: Durable Functions (local emulation, production only)
 cd backend/pipeline && func start
 ```
 
