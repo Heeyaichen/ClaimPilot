@@ -83,3 +83,38 @@ export function getVoiceWebSocketUrl(claimId: string): string {
   const base = API_BASE.replace(/^http/, "ws");
   return `${base}/api/v1/adjuster/voice/${claimId}`;
 }
+
+// Adjuster queue types
+
+export interface QueueClaim {
+  claim_id: string;
+  status: string;
+  claimant_name: string;
+  policy_number: string;
+  submitted_at: string;
+  updated_at: string;
+  fraud_result: { score: number; flags: string[]; recommendation: string } | null;
+  decision_result: { decision: string; confidence: number } | null;
+}
+
+export interface AdjusterQueueResponse {
+  claims: QueueClaim[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export async function getAdjusterQueue(
+  status = "ESCALATED",
+  page = 1,
+  pageSize = 20,
+): Promise<AdjusterQueueResponse> {
+  const params = new URLSearchParams({
+    status,
+    page: String(page),
+    page_size: String(pageSize),
+  });
+  const res = await fetch(`${API_BASE}/api/v1/adjuster/queue?${params}`);
+  if (!res.ok) throw new Error(`Queue fetch failed: ${res.statusText}`);
+  return res.json();
+}
