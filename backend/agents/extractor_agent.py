@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import logging
+import typing
 from typing import Any
 
 from backend.agents.base import AgentResponseError, FoundryAgentClient
 from backend.models.claim import ExtractedClaimFields
+
+if typing.TYPE_CHECKING:
+    from backend.services.search import SearchService
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +53,11 @@ Set confidence based on extraction completeness and quality.
 class ExtractorAgent:
     """Extracts structured fields from claim evidence."""
 
-    def __init__(self, client: FoundryAgentClient | None = None) -> None:
+    def __init__(
+        self,
+        client: FoundryAgentClient | None = None,
+        search_service: SearchService | None = None,
+    ) -> None:
         from backend.core.config import get_settings
 
         settings = get_settings()
@@ -57,6 +65,7 @@ class ExtractorAgent:
             agent_id=settings.extractor_agent_id or None,
         )
         self._use_stubs = settings.use_stub_agents
+        self._search = search_service
 
     def extract(
         self,
@@ -79,12 +88,20 @@ class ExtractorAgent:
         if self._use_stubs:
             return self._stub_extract()
 
-        context = {
+        context: dict[str, Any] = {
             "classification": classification,
             "doc_extraction": doc_extraction,
             "image_analysis": image_analysis,
             "voice_transcript": voice_transcript,
         }
+
+        # Enrich with policy lookup from Azure Search
+        if self._search and doc_extraction:
+            policy_number = doc_extraction.get("policy_number")
+            if policy_number:
+                policy = self._search.lookup_policy(policy_number)
+                if policy:
+                    context["policy_record"] = policy
 
         prompt = (
             "Extract all structured claim fields from the following evidence.\n"
