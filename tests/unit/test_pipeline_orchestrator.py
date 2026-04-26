@@ -10,30 +10,14 @@ from backend.models.claim import (
     PipelineStepState,
     StepStatus,
 )
-from backend.pipeline.orchestrator import (
-    STUB_CLASSIFICATION,
-    STUB_DECISION,
-    STUB_EXTRACTION,
-    ClaimOrchestrator,
-)
+from backend.pipeline.orchestrator import ClaimOrchestrator
 
 
 def _make_store() -> tuple[MagicMock, list[dict]]:
     """Create a mock state store that tracks upserted items."""
     items: list[dict] = []
 
-    def fake_upsert(body):
-        items.append(body)
-
     store = MagicMock()
-
-    # create_claim returns a record with initialized steps
-    def fake_create(record):
-        if not record.steps:
-            record.steps = [PipelineStepState(step=s) for s in PipelineStep]
-        return record
-
-    store.create_claim.side_effect = fake_create
 
     # update_step returns the updated record
     def fake_update(claim_id, step, status, output=None, error=None):
@@ -65,7 +49,6 @@ def _make_store() -> tuple[MagicMock, list[dict]]:
         )
 
     store.get_claim.side_effect = fake_get
-
     store.mark_claim_status.return_value = None
     return store, items
 
@@ -84,9 +67,10 @@ def test_run_pipeline_completes_all_steps():
     result = orch.run_pipeline(record)
 
     assert result.status == ClaimStatus.APPROVED
-    assert result.classification_result == STUB_CLASSIFICATION
-    assert result.extraction_result == STUB_EXTRACTION
-    assert result.decision_result == STUB_DECISION
+    assert result.classification_result is not None
+    assert result.extraction_result is not None
+    assert result.fraud_result is not None
+    assert result.decision_result is not None
     assert result.pipeline_duration_seconds is not None
 
 
@@ -96,7 +80,6 @@ def test_run_pipeline_emits_signalr_events():
 
     orch.run_pipeline(record)
 
-    # Should have emitted multiple events (start + complete for each step)
     assert broadcaster.broadcast_step_event.call_count > 0
 
 
@@ -120,8 +103,7 @@ def test_run_pipeline_with_audio_processes_voice():
 
 
 def test_run_pipeline_failure_sets_failed_status():
-    store, items = _make_store()
-    # Make the first update_step call raise to simulate failure
+    store, _ = _make_store()
     call_count = 0
     original_update = store.update_step.side_effect
 
@@ -140,15 +122,3 @@ def test_run_pipeline_failure_sets_failed_status():
 
     assert result.status == ClaimStatus.FAILED
     store.mark_claim_status.assert_called_with("test-005", ClaimStatus.FAILED)
-
-
-def test_stub_classification_structure():
-    assert "claim_type" in STUB_CLASSIFICATION
-    assert "confidence" in STUB_CLASSIFICATION
-    assert STUB_CLASSIFICATION["confidence"] > 0
-
-
-def test_stub_decision_structure():
-    assert STUB_DECISION["decision"] in ("APPROVE", "REJECT", "ESCALATE")
-    assert "reasoning_chain" in STUB_DECISION
-    assert isinstance(STUB_DECISION["reasoning_chain"], list)

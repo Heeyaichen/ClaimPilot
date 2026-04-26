@@ -49,11 +49,23 @@ class Settings(BaseSettings):
     azure_foundry_project_endpoint: str = ""
     foundry_model_deployment: str = "gpt-5-4"
 
-    # Agent IDs (Phase 2+)
+    # Agent IDs (Phase 3)
     classifier_agent_id: str = ""
     extractor_agent_id: str = ""
     fraud_agent_id: str = ""
     decision_agent_id: str = ""
+
+    # Stub mode — only for local dev, never silently in production
+    use_stub_agents: bool = False
+
+    # Azure Voice Live (Phase 4)
+    voice_live_endpoint: str = ""
+    voice_live_api_version: str = "2026-01-01-preview"
+    voice_live_model: str = "en-US-AvaMultilingualNeural"
+    voice_live_voice: str = "en-US-AvaMultilingualNeural"
+    voice_live_enable_mcp: bool = False
+    voice_live_mcp_server_url: str = ""
+    adjuster_session_token_secret: str = "dev-secret-change-in-prod"
 
 
 def get_settings() -> Settings:

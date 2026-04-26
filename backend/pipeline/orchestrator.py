@@ -1,11 +1,12 @@
 """Claim processing orchestrator — Durable Functions pattern.
 
-Implements the 7-step claim pipeline:
+Implements the 8-step claim pipeline:
 1. CLAIM_RECEIVED — validate input, mark received
 2-4. INGEST_DOCUMENT, INGEST_IMAGES, INGEST_VOICE — fan-out in parallel
-5. CLASSIFY_STUB — stub classification activity
-6. EXTRACT_VALIDATE_STUB — stub extraction/validation
-7. DECIDE_STUB — stub decision
+5. CLASSIFY — ClassifierAgent determines claim type
+6. EXTRACT_VALIDATE — ExtractorAgent extracts and validates fields
+7. FRAUD_SCREENING — FraudDetectionAgent assesses fraud risk
+8. DECIDE — DecisionAgent produces traceable adjudication
 
 Can run as a pure-Python orchestrator for local dev (no Azure Functions
 runtime required) or as Durable Functions activities in Azure.
@@ -23,45 +24,18 @@ from backend.models.claim import (
     PipelineStep,
     StepStatus,
 )
+from backend.pipeline.activities.classification import run_classification
+from backend.pipeline.activities.extraction import run_extraction
+from backend.pipeline.activities.fraud_detection import run_fraud_detection
+from backend.pipeline.activities.reasoning import run_decision
 from backend.services.claim_state_store import ClaimStateStore
 from backend.services.signalr import SignalRBroadcaster
 
 logger = logging.getLogger(__name__)
 
-# --- Stub results for Phase 2 (replaced by real agents in Phase 3) ---
-
-STUB_CLASSIFICATION = {
-    "claim_type": "AUTO_PHYSICAL_DAMAGE",
-    "confidence": 0.93,
-    "routing_rationale": "Stub: auto physical damage detected",
-    "requires_human_review": False,
-}
-
-STUB_EXTRACTION = {
-    "fields_extracted": 12,
-    "validation_flags": [],
-    "confidence": 0.91,
-    "note": "Stub: extraction not yet implemented",
-}
-
-STUB_DECISION = {
-    "decision": "APPROVE",
-    "confidence": 0.88,
-    "approved_amount": 8400.00,
-    "reasoning_chain": [
-        {
-            "step": "Coverage verified",
-            "conclusion": "Stub: policy active on loss date",
-            "evidence_source": "stub",
-            "evidence_value": "stub",
-        }
-    ],
-    "note": "Stub: decision agent not yet implemented",
-}
-
 
 class ClaimOrchestrator:
-    """Orchestrates the 7-step claim processing pipeline.
+    """Orchestrates the 8-step claim processing pipeline.
 
     Designed to work both locally (for dev/testing) and as
     Durable Functions activities in production.
@@ -121,7 +95,7 @@ class ClaimOrchestrator:
         self._emit(claim_id, step, "stepFailed", {"error": error, "willRetry": False})
 
     def run_pipeline(self, record: ClaimRecord) -> ClaimRecord:
-        """Execute the full 7-step pipeline for a claim.
+        """Execute the full 8-step pipeline for a claim.
 
         Args:
             record: The initial claim record (already created in Cosmos).
@@ -138,20 +112,48 @@ class ClaimOrchestrator:
             self._complete_step(claim_id, PipelineStep.CLAIM_RECEIVED)
 
             # Steps 2-4: Fan-out ingestion (parallel conceptually,
-            # executed sequentially here for simplicity; Durable Functions
-            # fan_out/fan_in handles true parallelism in production)
+            # executed sequentially here; Durable Functions fan_out/fan_in
+            # handles true parallelism in production)
             doc_output = self._step_ingest_document(claim_id, record.form_blob_url)
             image_output = self._step_ingest_images(claim_id, record.image_blob_urls)
             voice_output = self._step_ingest_voice(claim_id, record.audio_blob_url)
 
-            # Step 5: CLASSIFY_STUB
-            classify_output = self._step_classify(claim_id)
+            # Step 5: CLASSIFY
+            classify_output = self._step_classify(
+                claim_id,
+                doc_extraction=doc_output,
+                image_analysis=image_output,
+                voice_transcript=voice_output,
+            )
 
-            # Step 6: EXTRACT_VALIDATE_STUB
-            extract_output = self._step_extract_validate(claim_id)
+            # Step 6: EXTRACT_VALIDATE
+            extract_output = self._step_extract_validate(
+                claim_id,
+                classification=classify_output,
+                doc_extraction=doc_output,
+                image_analysis=image_output,
+                voice_transcript=voice_output,
+            )
 
-            # Step 7: DECIDE_STUB
-            decision_output = self._step_decide(claim_id)
+            # Step 7: FRAUD_SCREENING
+            fraud_output = self._step_fraud_screening(
+                claim_id,
+                extracted_fields=extract_output,
+                image_analysis=image_output,
+                voice_transcript=voice_output,
+                classification=classify_output,
+            )
+
+            # Step 8: DECIDE
+            decision_output = self._step_decide(
+                claim_id,
+                classification=classify_output,
+                extracted_fields=extract_output,
+                fraud_result=fraud_output,
+                doc_extraction=doc_output,
+                image_analysis=image_output,
+                voice_transcript=voice_output,
+            )
 
             # Update final record
             record = self._store.get_claim(claim_id) or record
@@ -160,21 +162,31 @@ class ClaimOrchestrator:
             record.voice_transcript = voice_output
             record.classification_result = classify_output
             record.extraction_result = extract_output
+            record.fraud_result = fraud_output
             record.decision_result = decision_output
-            record.status = ClaimStatus.APPROVED
+
+            # Map decision to claim status
+            decision = decision_output.get("decision", "ESCALATE")
+            if decision == "APPROVE":
+                record.status = ClaimStatus.APPROVED
+            elif decision == "REJECT":
+                record.status = ClaimStatus.REJECTED
+            else:
+                record.status = ClaimStatus.ESCALATED
+
             record.updated_at = datetime.utcnow()
             record.pipeline_duration_seconds = (
                 record.updated_at - record.submitted_at
             ).total_seconds()
-            self._store.mark_claim_status(claim_id, ClaimStatus.APPROVED)
+            self._store.mark_claim_status(claim_id, record.status)
 
             self._emit(
                 claim_id,
-                PipelineStep.DECIDE_STUB,
+                PipelineStep.DECIDE,
                 "claimDecided",
-                {"outcome": "APPROVED"},
+                {"outcome": record.status.value},
             )
-            logger.info("Pipeline completed for claim %s", claim_id)
+            logger.info("Pipeline completed for claim %s → %s", claim_id, record.status.value)
 
         except Exception:
             logger.exception("Pipeline failed for claim %s", claim_id)
@@ -190,7 +202,7 @@ class ClaimOrchestrator:
     def _step_ingest_document(
         self, claim_id: str, blob_url: str | None
     ) -> dict[str, Any]:
-        """Step 2: Document ingestion via DocumentIntelligenceService or stub."""
+        """Step 2: Document ingestion."""
         self._start_step(claim_id, PipelineStep.INGEST_DOCUMENT)
         try:
             output: dict[str, Any] = {"status": "stub", "note": "Doc Intelligence not called"}
@@ -205,7 +217,7 @@ class ClaimOrchestrator:
     def _step_ingest_images(
         self, claim_id: str, image_urls: list[str]
     ) -> dict[str, Any]:
-        """Step 3: Image ingestion via ContentUnderstandingService or stub."""
+        """Step 3: Image ingestion."""
         self._start_step(claim_id, PipelineStep.INGEST_IMAGES)
         try:
             output: dict[str, Any] = {
@@ -222,10 +234,9 @@ class ClaimOrchestrator:
     def _step_ingest_voice(
         self, claim_id: str, audio_url: str | None
     ) -> dict[str, Any]:
-        """Step 4: Voice transcription via SpeechService or stub."""
+        """Step 4: Voice transcription."""
         step = PipelineStep.INGEST_VOICE
         if not audio_url:
-            # No audio provided — skip this step
             self._store.update_step(claim_id, step, StepStatus.SKIPPED)
             self._emit(claim_id, step, "stepCompleted", {"skipped": True})
             return {"status": "skipped", "note": "No audio provided"}
@@ -242,22 +253,100 @@ class ClaimOrchestrator:
             self._fail_step(claim_id, step, str(e))
             return {"status": "failed", "error": str(e)}
 
-    def _step_classify(self, claim_id: str) -> dict[str, Any]:
-        """Step 5: Stub classification."""
-        self._start_step(claim_id, PipelineStep.CLASSIFY_STUB)
-        self._complete_step(claim_id, PipelineStep.CLASSIFY_STUB, STUB_CLASSIFICATION)
-        return STUB_CLASSIFICATION
+    def _step_classify(
+        self,
+        claim_id: str,
+        doc_extraction: dict[str, Any] | None = None,
+        image_analysis: dict[str, Any] | None = None,
+        voice_transcript: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Step 5: Classification via ClassifierAgent."""
+        self._start_step(claim_id, PipelineStep.CLASSIFY)
+        try:
+            result = run_classification(
+                doc_extraction=doc_extraction,
+                image_analysis=image_analysis,
+                voice_transcript=voice_transcript,
+            )
+            output = result.model_dump()
+            self._complete_step(claim_id, PipelineStep.CLASSIFY, output)
+            return output
+        except Exception as e:
+            self._fail_step(claim_id, PipelineStep.CLASSIFY, str(e))
+            raise
 
-    def _step_extract_validate(self, claim_id: str) -> dict[str, Any]:
-        """Step 6: Stub extraction and validation."""
-        self._start_step(claim_id, PipelineStep.EXTRACT_VALIDATE_STUB)
-        self._complete_step(
-            claim_id, PipelineStep.EXTRACT_VALIDATE_STUB, STUB_EXTRACTION
-        )
-        return STUB_EXTRACTION
+    def _step_extract_validate(
+        self,
+        claim_id: str,
+        classification: dict[str, Any] | None = None,
+        doc_extraction: dict[str, Any] | None = None,
+        image_analysis: dict[str, Any] | None = None,
+        voice_transcript: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Step 6: Extraction and validation via ExtractorAgent."""
+        self._start_step(claim_id, PipelineStep.EXTRACT_VALIDATE)
+        try:
+            result = run_extraction(
+                classification=classification,
+                doc_extraction=doc_extraction,
+                image_analysis=image_analysis,
+                voice_transcript=voice_transcript,
+            )
+            output = result.model_dump()
+            self._complete_step(claim_id, PipelineStep.EXTRACT_VALIDATE, output)
+            return output
+        except Exception as e:
+            self._fail_step(claim_id, PipelineStep.EXTRACT_VALIDATE, str(e))
+            raise
 
-    def _step_decide(self, claim_id: str) -> dict[str, Any]:
-        """Step 7: Stub decision."""
-        self._start_step(claim_id, PipelineStep.DECIDE_STUB)
-        self._complete_step(claim_id, PipelineStep.DECIDE_STUB, STUB_DECISION)
-        return STUB_DECISION
+    def _step_fraud_screening(
+        self,
+        claim_id: str,
+        extracted_fields: dict[str, Any] | None = None,
+        image_analysis: dict[str, Any] | None = None,
+        voice_transcript: dict[str, Any] | None = None,
+        classification: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Step 7: Fraud risk assessment via FraudDetectionAgent."""
+        self._start_step(claim_id, PipelineStep.FRAUD_SCREENING)
+        try:
+            result = run_fraud_detection(
+                extracted_fields=extracted_fields,
+                image_analysis=image_analysis,
+                voice_transcript=voice_transcript,
+                classification=classification,
+            )
+            output = result.model_dump()
+            self._complete_step(claim_id, PipelineStep.FRAUD_SCREENING, output)
+            return output
+        except Exception as e:
+            self._fail_step(claim_id, PipelineStep.FRAUD_SCREENING, str(e))
+            raise
+
+    def _step_decide(
+        self,
+        claim_id: str,
+        classification: dict[str, Any] | None = None,
+        extracted_fields: dict[str, Any] | None = None,
+        fraud_result: dict[str, Any] | None = None,
+        doc_extraction: dict[str, Any] | None = None,
+        image_analysis: dict[str, Any] | None = None,
+        voice_transcript: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Step 8: Final decision via DecisionAgent."""
+        self._start_step(claim_id, PipelineStep.DECIDE)
+        try:
+            result = run_decision(
+                classification=classification,
+                extracted_fields=extracted_fields,
+                fraud_result=fraud_result,
+                doc_extraction=doc_extraction,
+                image_analysis=image_analysis,
+                voice_transcript=voice_transcript,
+            )
+            output = result.model_dump()
+            self._complete_step(claim_id, PipelineStep.DECIDE, output)
+            return output
+        except Exception as e:
+            self._fail_step(claim_id, PipelineStep.DECIDE, str(e))
+            raise

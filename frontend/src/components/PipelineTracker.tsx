@@ -7,9 +7,10 @@ const STEP_LABELS: Record<string, string> = {
   INGEST_DOCUMENT: "Document Ingestion",
   INGEST_IMAGES: "Image Ingestion",
   INGEST_VOICE: "Voice Transcription",
-  CLASSIFY_STUB: "Classification",
-  EXTRACT_VALIDATE_STUB: "Extraction & Validation",
-  DECIDE_STUB: "Decision",
+  CLASSIFY: "Classification",
+  EXTRACT_VALIDATE: "Extraction & Validation",
+  FRAUD_SCREENING: "Fraud Screening",
+  DECIDE: "Decision",
 };
 
 function StepIcon({ status }: { status: string }) {
