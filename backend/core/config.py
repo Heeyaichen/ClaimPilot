@@ -35,8 +35,12 @@ class Settings(BaseSettings):
     # Azure Blob Storage
     azure_storage_endpoint: str = ""
 
+    # Azure SignalR
+    azure_signalr_connection: str = ""
+
     # Azure Service Bus
     azure_service_bus_namespace: str = ""
+    azure_service_bus_queue: str = "claims-pipeline"
 
     # Azure Key Vault
     azure_key_vault_endpoint: str = ""
