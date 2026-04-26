@@ -1,0 +1,55 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment files (keep .env.example)
+.env
+.env.local
+.env.*.local
+
+# Test / lint caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Generated synthetic data (commit generator + README only)
+evaluation/datasets/acord_synthetic/forms/
+evaluation/datasets/acord_synthetic/labels/
+evaluation/datasets/acord_synthetic/training/
+
+# Bicep compiled output
+*.json
+!backend/domains/auto_damage/*.json
+!evaluation/datasets/acord_synthetic/README.md
+
+# Node (for future frontend)
+node_modules/
+.next/
+out/
+
+# Azure Functions local settings
+local.settings.json
