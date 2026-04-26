@@ -14,12 +14,12 @@ resource functionPlan 'Microsoft.Web/serverfarms@2024-04-01' = {
   name: planName
   location: location
   sku: {
-    name: 'FC1'
-    tier: 'FlexConsumption'
+    name: 'B1'
+    tier: 'Basic'
   }
-  kind: 'functionapp'
+  kind: 'app'
   properties: {
-    maximumElasticWorkerCount: 100
+    reserved: true
   }
   tags: tags
 }

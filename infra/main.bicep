@@ -122,29 +122,32 @@ module signalr './modules/signalr.bicep' = {
   }
 }
 
-module search './modules/search.bicep' = {
-  name: 'search-deploy'
-  scope: rg
-  params: {
-    location: location
-    projectName: projectName
-    environment: environment
-    tags: tags
-  }
-}
+// Search module skipped — eastus2 capacity exhausted. Uncomment when capacity available.
+// module search './modules/search.bicep' = {
+//   name: 'search-deploy'
+//   scope: rg
+//   params: {
+//     location: location
+//     projectName: projectName
+//     environment: environment
+//     tags: tags
+//   }
+// }
 
-module functions './modules/functions.bicep' = {
-  name: 'functions-deploy'
-  scope: rg
-  params: {
-    location: location
-    projectName: projectName
-    environment: environment
-    tags: tags
-    storageAccountName: storage.outputs.storageAccountName
-    storageAccountEndpoint: storage.outputs.storageEndpoint
-  }
-}
+// Functions module skipped — subscription has 0 quota for App Service plans.
+// Uncomment after requesting quota: https://portal.azure.com/#create/Microsoft.Support/Parameters/%7B%22subId%22%3A%226f6d44e3-1102-48ee-b4f9-3207cf1c63b6%22%2C%22pesId%22%3A%2276cbf240-4def-4a3e-b7e8-3a7e54c4a9b7%22%2C%22supportTopicId%22%3A%22e6e4ef12-5e5e-4c77-b8c8-7e2308ee6529%22%7D
+// module functions './modules/functions.bicep' = {
+//   name: 'functions-deploy'
+//   scope: rg
+//   params: {
+//     location: location
+//     projectName: projectName
+//     environment: environment
+//     tags: tags
+//     storageAccountName: storage.outputs.storageAccountName
+//     storageAccountEndpoint: storage.outputs.storageEndpoint
+//   }
+// }
 
 module foundry './modules/foundry.bicep' = {
   name: 'foundry-deploy'
@@ -157,30 +160,28 @@ module foundry './modules/foundry.bicep' = {
   }
 }
 
-// ---------------------------------------------------------------
-// RBAC Role Assignments — delegated to RG-scoped module
-// ---------------------------------------------------------------
-
-module rbac './modules/rbac.bicep' = {
-  name: 'rbac-deploy'
-  scope: rg
-  params: {
-    functionPrincipalId: functions.outputs.functionAppPrincipalId
-    location: location
-    projectName: projectName
-    environment: environment
-    tags: tags
-    storageAccountId: storage.outputs.storageAccountId
-    keyVaultId: keyvault.outputs.keyVaultId
-    cosmosAccountId: cosmos.outputs.cosmosAccountId
-    serviceBusNamespaceId: servicebus.outputs.serviceBusNamespaceId
-    searchServiceId: search.outputs.searchServiceId
-    docIntelligenceId: docIntelligence.outputs.docIntelligenceId
-    speechServiceId: speech.outputs.speechServiceId
-    translatorId: translator.outputs.translatorId
-    contentUnderstandingId: contentUnderstanding.outputs.contentUnderstandingId
-  }
-}
+// RBAC module skipped — depends on Functions (no quota).
+// Uncomment along with Functions after quota is approved.
+// module rbac './modules/rbac.bicep' = {
+//   name: 'rbac-deploy'
+//   scope: rg
+//   params: {
+//     functionPrincipalId: functions.outputs.functionAppPrincipalId
+//     location: location
+//     projectName: projectName
+//     environment: environment
+//     tags: tags
+//     storageAccountId: storage.outputs.storageAccountId
+//     keyVaultId: keyvault.outputs.keyVaultId
+//     cosmosAccountId: cosmos.outputs.cosmosAccountId
+//     serviceBusNamespaceId: servicebus.outputs.serviceBusNamespaceId
+//     searchServiceId: search.outputs.searchServiceId
+//     docIntelligenceId: docIntelligence.outputs.docIntelligenceId
+//     speechServiceId: speech.outputs.speechServiceId
+//     translatorId: translator.outputs.translatorId
+//     contentUnderstandingId: contentUnderstanding.outputs.contentUnderstandingId
+//   }
+// }
 
 // ---------------------------------------------------------------
 // Outputs — all endpoint URLs and resource names
@@ -216,11 +217,13 @@ output claimsIngestionQueueName string = servicebus.outputs.claimsIngestionQueue
 output signalRName string = signalr.outputs.signalRName
 output signalREndpoint string = signalr.outputs.signalREndpoint
 
-output searchServiceName string = search.outputs.searchServiceName
-output searchServiceEndpoint string = search.outputs.searchServiceEndpoint
+// Search outputs skipped — module commented out (region capacity)
+// output searchServiceName string = search.outputs.searchServiceName
+// output searchServiceEndpoint string = search.outputs.searchServiceEndpoint
 
-output functionAppName string = functions.outputs.functionAppName
-output functionAppPrincipalId string = functions.outputs.functionAppPrincipalId
-output functionAppDefaultHostname string = functions.outputs.functionAppDefaultHostname
+// Function outputs skipped — module commented out (no subscription quota)
+// output functionAppName string = functions.outputs.functionAppName
+// output functionAppPrincipalId string = functions.outputs.functionAppPrincipalId
+// output functionAppDefaultHostname string = functions.outputs.functionAppDefaultHostname
 
 output foundryWorkspaceName string = foundry.outputs.foundryWorkspaceName

@@ -9,7 +9,7 @@ resource searchService 'Microsoft.Search/searchServices@2024-06-01-preview' = {
   name: searchServiceName
   location: location
   sku: {
-    name: 'standard'
+    name: 'free'
   }
   properties: {
     replicaCount: 1

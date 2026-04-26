@@ -143,10 +143,16 @@ class PipelineStepState(BaseModel):
 class ClaimRecord(BaseModel):
     """Full claim record persisted in Cosmos DB."""
 
+    model_config = {"populate_by_name": True}
+
     claim_id: str
     status: ClaimStatus = ClaimStatus.SUBMITTED
     submitted_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+    # Cosmos DB compatibility fields
+    id: str = ""  # aliases claim_id for Cosmos DB
+    policyId: str = ""  # partition key — aliases policy_number
 
     # File references
     form_blob_url: str | None = None
@@ -169,6 +175,13 @@ class ClaimRecord(BaseModel):
     claimant_name: str = ""
     policy_number: str = ""
     pipeline_duration_seconds: float | None = None
+
+    def model_post_init(self, __context: object) -> None:
+        """Sync Cosmos DB compatibility fields after initialization."""
+        if not self.id:
+            self.id = self.claim_id
+        if not self.policyId:
+            self.policyId = self.policy_number or self.claim_id
 
 
 class ClaimSubmissionRequest(BaseModel):

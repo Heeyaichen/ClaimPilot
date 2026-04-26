@@ -42,6 +42,7 @@ def _make_store() -> tuple[ClaimStateStore, MagicMock]:
     mock_container = MagicMock()
     mock_container.upsert_item.return_value = None
     mock_container.read_item.return_value = _base_record_dict()
+    mock_container.query_items.return_value = [_base_record_dict()]
 
     store = ClaimStateStore.__new__(ClaimStateStore)
     store._container = mock_container
@@ -65,7 +66,7 @@ def test_create_claim_initializes_steps():
 
 def test_get_claim_found():
     store, mock_container = _make_store()
-    mock_container.read_item.return_value = _base_record_dict("c1")
+    mock_container.query_items.return_value = [_base_record_dict("c1")]
 
     result = store.get_claim("c1")
     assert result is not None
@@ -74,7 +75,7 @@ def test_get_claim_found():
 
 def test_get_claim_not_found():
     store, mock_container = _make_store()
-    mock_container.read_item.side_effect = Exception("not found")
+    mock_container.query_items.return_value = []
 
     result = store.get_claim("missing")
     assert result is None

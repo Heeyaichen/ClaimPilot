@@ -3,7 +3,7 @@ param projectName string
 param environment string
 param tags object = {}
 
-var namespaceName = '${projectName}-${environment}-sb'
+var namespaceName = '${projectName}-${environment}-bus'
 
 resource serviceBusNamespace 'Microsoft.ServiceBus/namespaces@2024-01-01' = {
   name: namespaceName

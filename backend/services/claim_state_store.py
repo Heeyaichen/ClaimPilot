@@ -66,12 +66,20 @@ class ClaimStateStore:
         return record
 
     def get_claim(self, claim_id: str) -> ClaimRecord | None:
-        """Retrieve a claim record by ID."""
+        """Retrieve a claim record by ID using cross-partition query."""
         try:
-            item = self._get_container().read_item(
-                item=claim_id, partition_key=claim_id
+            query = "SELECT * FROM c WHERE c.claim_id = @claim_id"
+            params = [{"name": "@claim_id", "value": claim_id}]
+            items = list(
+                self._get_container().query_items(
+                    query=query,
+                    parameters=params,
+                    enable_cross_partition_query=True,
+                )
             )
-            return ClaimRecord.model_validate(item)
+            if not items:
+                return None
+            return ClaimRecord.model_validate(items[0])
         except Exception:
             logger.warning("Claim %s not found", claim_id)
             return None

@@ -3,7 +3,7 @@ param projectName string
 param environment string
 param tags object = {}
 
-var keyVaultName = '${projectName}-${environment}-kv'
+var keyVaultName = '${projectName}-${environment}-kv${take(uniqueString(resourceGroup().id), 6)}'
 
 resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' = {
   name: keyVaultName
