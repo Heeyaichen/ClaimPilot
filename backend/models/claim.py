@@ -152,7 +152,7 @@ class ClaimRecord(BaseModel):
 
     # Cosmos DB compatibility fields
     id: str = ""  # aliases claim_id for Cosmos DB
-    policyId: str = ""  # partition key — aliases policy_number
+    policyId: str = ""  # noqa: N815 — partition key, Cosmos DB requires camelCase
 
     # File references
     form_blob_url: str | None = None

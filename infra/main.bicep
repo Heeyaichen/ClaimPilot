@@ -17,6 +17,9 @@ param backendHostKind string = 'functions'
 // Image tag for Container Apps mode
 param imageTag string = 'v1.0.0'
 
+// Create Foundry project via ARM (set false when projects API has platform issues)
+param createProject bool = true
+
 // ---------------------------------------------------------------
 // Resource Group
 // ---------------------------------------------------------------
@@ -149,6 +152,7 @@ module foundry './modules/foundry.bicep' = {
     environment: environment
     tags: tags
     modelDeploymentName: 'gpt-5-4'
+    createProject: createProject
   }
 }
 

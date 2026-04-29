@@ -9,7 +9,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY pyproject.toml README.md ./
 COPY backend/ backend/
 COPY evaluation/ evaluation/
-COPY domains/ domains/
 
 RUN pip install --no-cache-dir -e ".[dev]"
 
