@@ -27,6 +27,10 @@ export default function VoiceAdjuster({ claimId }: { claimId: string }) {
 
   const wsRef = useRef<WebSocket | null>(null);
   const transcriptEndRef = useRef<HTMLDivElement>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const processorRef = useRef<ScriptProcessorNode | null>(null);
+  // TODO: migrate from ScriptProcessorNode to AudioWorkletNode for production
 
   // Load claim context on mount
   useEffect(() => {
@@ -42,6 +46,55 @@ export default function VoiceAdjuster({ claimId }: { claimId: string }) {
 
   const addTranscript = useCallback((role: TranscriptEntry["role"], text: string) => {
     setTranscript((prev) => [...prev, { role, text, timestamp: new Date() }]);
+  }, []);
+
+  const startMicrophone = useCallback(async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 1,
+          sampleRate: 24000,
+          echoCancellation: true,
+          noiseSuppression: true,
+        },
+      });
+      mediaStreamRef.current = stream;
+
+      const audioCtx = new AudioContext({ sampleRate: 24000 });
+      audioContextRef.current = audioCtx;
+
+      const source = audioCtx.createMediaStreamSource(stream);
+      const processor = audioCtx.createScriptProcessor(4096, 1, 1);
+      processorRef.current = processor;
+
+      processor.onaudioprocess = (e) => {
+        const ws = wsRef.current;
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+        const inputData = e.inputBuffer.getChannelData(0);
+        const pcm16 = new Int16Array(inputData.length);
+        for (let i = 0; i < inputData.length; i++) {
+          const s = Math.max(-1, Math.min(1, inputData[i]));
+          pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+        }
+        ws.send(pcm16.buffer);
+      };
+
+      source.connect(processor);
+      processor.connect(audioCtx.destination);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Microphone access failed";
+      setError(`Microphone error: ${msg}`);
+    }
+  }, []);
+
+  const stopMicrophone = useCallback(() => {
+    processorRef.current?.disconnect();
+    audioContextRef.current?.close();
+    mediaStreamRef.current?.getTracks().forEach((t) => t.stop());
+    processorRef.current = null;
+    audioContextRef.current = null;
+    mediaStreamRef.current = null;
   }, []);
 
   // Connect to WebSocket
@@ -74,6 +127,11 @@ export default function VoiceAdjuster({ claimId }: { claimId: string }) {
 
           const modeLabel = mode === "voice_live" ? "Voice Live" : "Text Mode";
           addTranscript("system", `Session connected (${modeLabel})`);
+
+          // Start microphone if Voice Live is active
+          if (data.audio_enabled) {
+            startMicrophone();
+          }
           return;
         }
 
@@ -87,7 +145,27 @@ export default function VoiceAdjuster({ claimId }: { claimId: string }) {
           return;
         }
 
-        // Handle transcript / response events
+        // Voice Live transcript delta events
+        if (data.type === "response.audio_transcript.delta") {
+          return; // handled by .done
+        }
+        if (data.type === "response.audio_transcript.done") {
+          const text = data.transcript || "";
+          if (text) {
+            const role = data.item?.role === "user" ? "user" : "assistant";
+            addTranscript(role, text);
+          }
+          return;
+        }
+        if (data.type === "response.text.delta") {
+          return;
+        }
+        if (data.type === "response.text.done") {
+          if (data.text) addTranscript("assistant", data.text);
+          return;
+        }
+
+        // Fallback transcript events from text mode
         if (data.type === "transcript" || data.role) {
           const role = data.role === "user" ? "user" : "assistant";
           const text = data.text || data.transcript || JSON.stringify(data);
@@ -95,15 +173,40 @@ export default function VoiceAdjuster({ claimId }: { claimId: string }) {
           return;
         }
 
-        if (data.type === "audio.output" || data.audio) {
+        // Audio output — not yet played back (TODO: implement audio playback)
+        if (data.type === "response.audio.delta" || data.type === "response.audio.done") {
           return;
         }
 
+        // Speech detection events
+        if (data.type === "input_audio_buffer.speech_started") {
+          return;
+        }
+        if (data.type === "input_audio_buffer.speech_stopped") {
+          return;
+        }
+
+        // Session events
+        if (data.type === "session.created" || data.type === "session.updated") {
+          return;
+        }
+
+        // Response lifecycle
+        if (data.type === "response.created" || data.type === "response.done") {
+          return;
+        }
+
+        // Conversation items
+        if (data.type === "conversation.item.created") {
+          return;
+        }
+
+        // Tool results — show in transcript
         if (data.type === "tool_result") {
           addTranscript("system", `Tool result: ${JSON.stringify(data.output).slice(0, 200)}`);
         }
       } catch {
-        // Non-JSON message (binary audio data)
+        // Non-JSON message
       }
     };
 
@@ -116,11 +219,12 @@ export default function VoiceAdjuster({ claimId }: { claimId: string }) {
       setConnectionState("disconnected");
       setSessionMode("unknown");
       setAudioEnabled(false);
+      stopMicrophone();
       if (event.code !== 1000) {
         addTranscript("system", `Disconnected (code: ${event.code})`);
       }
     };
-  }, [claimId, addTranscript]);
+  }, [claimId, addTranscript, startMicrophone, stopMicrophone]);
 
   const disconnect = useCallback(() => {
     wsRef.current?.close(1000, "User disconnected");
@@ -128,8 +232,9 @@ export default function VoiceAdjuster({ claimId }: { claimId: string }) {
     setConnectionState("disconnected");
     setSessionMode("unknown");
     setAudioEnabled(false);
+    stopMicrophone();
     addTranscript("system", "Session ended");
-  }, [addTranscript]);
+  }, [stopMicrophone, addTranscript]);
 
   const sendTextMessage = useCallback(() => {
     const ws = wsRef.current;
@@ -149,8 +254,9 @@ export default function VoiceAdjuster({ claimId }: { claimId: string }) {
   useEffect(() => {
     return () => {
       wsRef.current?.close(1000);
+      stopMicrophone();
     };
-  }, []);
+  }, [stopMicrophone]);
 
   const isConnected = connectionState === "connected";
   const isTextMode = sessionMode === "text_fallback" || sessionMode === "unknown";
@@ -219,33 +325,27 @@ export default function VoiceAdjuster({ claimId }: { claimId: string }) {
                 : "bg-amber-900 text-amber-300"
             }`}
           >
-            {sessionMode === "voice_live" ? "Voice Live" : "Text Mode"}
+            {sessionMode === "voice_live" ? "Voice Live Active" : "Text Mode"}
           </span>
         )}
 
-        {/* Microphone control — only active in voice_live mode */}
+        {/* Microphone status */}
         {isConnected && (
-          <button
-            disabled={!audioEnabled}
+          <span
             className={`px-3 py-1.5 rounded-lg text-sm font-medium ${
               audioEnabled
-                ? "bg-green-700 hover:bg-green-600 text-white"
-                : "bg-slate-700 text-slate-500 cursor-not-allowed"
+                ? "bg-green-700 text-white"
+                : "bg-slate-700 text-slate-500"
             }`}
-            title={
-              audioEnabled
-                ? "Microphone active"
-                : "Voice Live not configured — microphone unavailable"
-            }
           >
             {audioEnabled ? "Mic On" : "Mic Off"}
-          </button>
+          </span>
         )}
 
-        {/* Microphone unavailable notice */}
+        {/* Unavailable notice for text mode */}
         {isConnected && isTextMode && (
           <span className="text-amber-400 text-xs">
-            Microphone unavailable — Voice Live not configured. Use text input below.
+            Voice Live not configured. Use text input below.
           </span>
         )}
       </div>
@@ -254,7 +354,9 @@ export default function VoiceAdjuster({ claimId }: { claimId: string }) {
       <div className="bg-slate-900 rounded-lg border border-slate-700 h-96 overflow-y-auto p-4 space-y-3">
         {transcript.length === 0 ? (
           <p className="text-slate-500 text-center mt-20">
-            Connect to start a session. Type questions about the claim below.
+            {audioEnabled
+              ? "Speak or type a question about the claim."
+              : "Connect to start a session. Type questions about the claim below."}
           </p>
         ) : (
           transcript.map((entry, i) => (

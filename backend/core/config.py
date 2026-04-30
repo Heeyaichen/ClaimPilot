@@ -60,9 +60,9 @@ class Settings(BaseSettings):
 
     # Azure Voice Live (Phase 4)
     voice_live_endpoint: str = ""
-    voice_live_api_version: str = "2026-01-01-preview"
-    voice_live_model: str = "en-US-AvaMultilingualNeural"
-    voice_live_voice: str = "en-US-AvaMultilingualNeural"
+    voice_live_api_version: str = "2025-10-01"
+    voice_live_model: str = "gpt-realtime"
+    voice_live_voice: str = "alloy"
     voice_live_enable_mcp: bool = False
     voice_live_mcp_server_url: str = ""
     adjuster_session_token_secret: str = "dev-secret-change-in-prod"
