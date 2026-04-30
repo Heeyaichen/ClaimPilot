@@ -141,6 +141,11 @@ export default function VoiceAdjuster({ claimId }: { claimId: string }) {
           return;
         }
 
+        if (data.type === "status") {
+          addTranscript("system", data.message || `Status: ${data.status}`);
+          return;
+        }
+
         if (data.type === "error") {
           setError(data.message || "Voice Live error");
           return;

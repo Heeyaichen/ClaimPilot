@@ -31,6 +31,7 @@ from backend.services.claim_lookup_tool import (
     ADJUSTER_SYSTEM_INSTRUCTIONS,
     ClaimLookupTool,
 )
+from backend.services.claim_state_store import ClaimStateStore
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +44,7 @@ class VoiceLiveService:
         claim_lookup: ClaimLookupTool | None = None,
         mcp_adapter: MCPClaimServerAdapter | None = None,
     ) -> None:
-        self._lookup = claim_lookup or ClaimLookupTool()
+        self._lookup = claim_lookup or ClaimLookupTool(state_store=ClaimStateStore())
         self._mcp = mcp_adapter or MCPClaimServerAdapter(lookup_tool=self._lookup)
 
     def create_adjuster_session(
