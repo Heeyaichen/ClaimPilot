@@ -8,6 +8,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
 
+from backend.core.config import get_settings
 from backend.models.claim import ClaimRecord
 from backend.models.voice_live import AdjusterSessionResponse, ClaimLookupResult
 from backend.services.claim_lookup_tool import ClaimLookupTool
@@ -138,10 +139,14 @@ async def voice_websocket(websocket: WebSocket, claim_id: str) -> None:
     service = None
     voice_live_available = False
 
+    settings = get_settings()
+    voice_live_configured = bool(settings.voice_live_endpoint)
+
     try:
         service = _get_voice_service()
         session = service.create_adjuster_session(claim_id)
-        voice_live_available = True
+        # Only mark as available if endpoint is actually configured
+        voice_live_available = voice_live_configured
     except ValueError:
         await websocket.close(code=4004, reason=f"Claim {claim_id} not found")
         return
@@ -155,6 +160,9 @@ async def voice_websocket(websocket: WebSocket, claim_id: str) -> None:
         await websocket.send_json({
             "type": "session.config",
             "session_id": session.session_id,
+            "mode": "voice_live",
+            "audio_enabled": True,
+            "text_fallback_enabled": True,
             "config": config.model_dump(),
         })
         logger.info("Voice session started: claim=%s session=%s", claim_id, session.session_id)
@@ -163,10 +171,12 @@ async def voice_websocket(websocket: WebSocket, claim_id: str) -> None:
         lookup = _get_lookup_tool()
         claim_summary = lookup.get_claim_summary(claim_id)
         await websocket.send_json({
-            "type": "status",
-            "status": "connected",
+            "type": "session.config",
+            "session_id": "text-fallback",
             "mode": "text_fallback",
-            "message": "Voice Live unavailable; text fallback active",
+            "audio_enabled": False,
+            "text_fallback_enabled": True,
+            "warning": "Voice Live is not configured; text fallback is active.",
             "claim_context": claim_summary.model_dump() if claim_summary.found else {},
         })
         logger.info("Text fallback session started: claim=%s", claim_id)

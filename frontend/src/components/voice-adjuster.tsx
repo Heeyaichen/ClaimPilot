@@ -14,20 +14,19 @@ interface TranscriptEntry {
 }
 
 type ConnectionState = "disconnected" | "connecting" | "connected" | "error";
+type SessionMode = "unknown" | "text_fallback" | "voice_live";
 
 export default function VoiceAdjuster({ claimId }: { claimId: string }) {
   const [connectionState, setConnectionState] = useState<ConnectionState>("disconnected");
+  const [sessionMode, setSessionMode] = useState<SessionMode>("unknown");
+  const [audioEnabled, setAudioEnabled] = useState(false);
   const [claimContext, setClaimContext] = useState<ClaimLookupResult | null>(null);
   const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
   const [textInput, setTextInput] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [micPermission, setMicPermission] = useState<PermissionState | "unknown">("unknown");
 
   const wsRef = useRef<WebSocket | null>(null);
   const transcriptEndRef = useRef<HTMLDivElement>(null);
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const mediaStreamRef = useRef<MediaStream | null>(null);
-  const processorRef = useRef<ScriptProcessorNode | null>(null);
 
   // Load claim context on mount
   useEffect(() => {
@@ -41,86 +40,16 @@ export default function VoiceAdjuster({ claimId }: { claimId: string }) {
     transcriptEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [transcript]);
 
-  // Check microphone permission
-  const checkMicPermission = useCallback(async (): Promise<boolean> => {
-    try {
-      const result = await navigator.permissions.query({ name: "microphone" as PermissionName });
-      setMicPermission(result.state);
-      if (result.state === "denied") {
-        setError("Microphone permission denied. Please allow microphone access.");
-        return false;
-      }
-      return true;
-    } catch {
-      // permissions.query may not support microphone in all browsers
-      setMicPermission("unknown");
-      return true;
-    }
-  }, []);
-
   const addTranscript = useCallback((role: TranscriptEntry["role"], text: string) => {
     setTranscript((prev) => [...prev, { role, text, timestamp: new Date() }]);
-  }, []);
-
-  // Start microphone capture and send audio to WebSocket
-  const startMicrophone = useCallback(async () => {
-    const permitted = await checkMicPermission();
-    if (!permitted) return;
-
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: 1,
-          sampleRate: 24000,
-          echoCancellation: true,
-          noiseSuppression: true,
-        },
-      });
-      mediaStreamRef.current = stream;
-
-      const audioCtx = new AudioContext({ sampleRate: 24000 });
-      audioContextRef.current = audioCtx;
-
-      const source = audioCtx.createMediaStreamSource(stream);
-      const processor = audioCtx.createScriptProcessor(4096, 1, 1);
-      processorRef.current = processor;
-
-      processor.onaudioprocess = (e) => {
-        const ws = wsRef.current;
-        if (!ws || ws.readyState !== WebSocket.OPEN) return;
-
-        const inputData = e.inputBuffer.getChannelData(0);
-        // Convert float32 to int16 PCM
-        const pcm16 = new Int16Array(inputData.length);
-        for (let i = 0; i < inputData.length; i++) {
-          const s = Math.max(-1, Math.min(1, inputData[i]));
-          pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
-        }
-        ws.send(pcm16.buffer);
-      };
-
-      source.connect(processor);
-      processor.connect(audioCtx.destination);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "Microphone access failed";
-      setError(`Microphone error: ${msg}`);
-      setMicPermission("denied");
-    }
-  }, [checkMicPermission]);
-
-  const stopMicrophone = useCallback(() => {
-    processorRef.current?.disconnect();
-    audioContextRef.current?.close();
-    mediaStreamRef.current?.getTracks().forEach((t) => t.stop());
-    processorRef.current = null;
-    audioContextRef.current = null;
-    mediaStreamRef.current = null;
   }, []);
 
   // Connect to WebSocket
   const connect = useCallback(async () => {
     setError(null);
     setConnectionState("connecting");
+    setSessionMode("unknown");
+    setAudioEnabled(false);
 
     const wsUrl = getVoiceWebSocketUrl(claimId);
     const ws = new WebSocket(wsUrl);
@@ -128,7 +57,6 @@ export default function VoiceAdjuster({ claimId }: { claimId: string }) {
 
     ws.onopen = () => {
       setConnectionState("connected");
-      addTranscript("system", "Connected to voice session");
     };
 
     ws.onmessage = (event) => {
@@ -136,16 +64,16 @@ export default function VoiceAdjuster({ claimId }: { claimId: string }) {
         const data = JSON.parse(event.data);
 
         if (data.type === "session.config") {
-          addTranscript("system", `Session configured: ${data.session_id}`);
-          // Only start microphone if server reports Voice Live is ready
-          if (data.config?.voice) {
-            startMicrophone();
-          }
-          return;
-        }
+          const mode = data.mode === "voice_live" ? "voice_live" : "text_fallback";
+          setSessionMode(mode);
+          setAudioEnabled(data.audio_enabled === true);
 
-        if (data.type === "status") {
-          addTranscript("system", data.message || `Status: ${data.status}`);
+          if (data.warning) {
+            addTranscript("system", data.warning);
+          }
+
+          const modeLabel = mode === "voice_live" ? "Voice Live" : "Text Mode";
+          addTranscript("system", `Session connected (${modeLabel})`);
           return;
         }
 
@@ -155,11 +83,11 @@ export default function VoiceAdjuster({ claimId }: { claimId: string }) {
         }
 
         if (data.type === "error") {
-          setError(data.message || "Voice Live error");
+          setError(data.message || "Session error");
           return;
         }
 
-        // Handle transcript events
+        // Handle transcript / response events
         if (data.type === "transcript" || data.role) {
           const role = data.role === "user" ? "user" : "assistant";
           const text = data.text || data.transcript || JSON.stringify(data);
@@ -167,13 +95,10 @@ export default function VoiceAdjuster({ claimId }: { claimId: string }) {
           return;
         }
 
-        // Handle audio output (would need audio playback)
         if (data.type === "audio.output" || data.audio) {
-          // Audio playback would go here for Phase 4
           return;
         }
 
-        // Tool results — show in transcript
         if (data.type === "tool_result") {
           addTranscript("system", `Tool result: ${JSON.stringify(data.output).slice(0, 200)}`);
         }
@@ -185,25 +110,26 @@ export default function VoiceAdjuster({ claimId }: { claimId: string }) {
     ws.onerror = () => {
       setError("WebSocket connection error");
       setConnectionState("error");
-      stopMicrophone();
     };
 
     ws.onclose = (event) => {
       setConnectionState("disconnected");
-      stopMicrophone();
+      setSessionMode("unknown");
+      setAudioEnabled(false);
       if (event.code !== 1000) {
         addTranscript("system", `Disconnected (code: ${event.code})`);
       }
     };
-  }, [claimId, addTranscript, startMicrophone, stopMicrophone]);
+  }, [claimId, addTranscript]);
 
   const disconnect = useCallback(() => {
     wsRef.current?.close(1000, "User disconnected");
     wsRef.current = null;
     setConnectionState("disconnected");
-    stopMicrophone();
+    setSessionMode("unknown");
+    setAudioEnabled(false);
     addTranscript("system", "Session ended");
-  }, [stopMicrophone, addTranscript]);
+  }, [addTranscript]);
 
   const sendTextMessage = useCallback(() => {
     const ws = wsRef.current;
@@ -223,12 +149,14 @@ export default function VoiceAdjuster({ claimId }: { claimId: string }) {
   useEffect(() => {
     return () => {
       wsRef.current?.close(1000);
-      stopMicrophone();
     };
-  }, [stopMicrophone]);
+  }, []);
+
+  const isConnected = connectionState === "connected";
+  const isTextMode = sessionMode === "text_fallback" || sessionMode === "unknown";
 
   return (
-    <div className="max-w-4xl mx-auto p-6 space-y-6">
+    <div className="max-w-4xl mx-auto p-6 space-y-4">
       {/* Claim Context Banner */}
       {claimContext && (
         <div className="bg-slate-800 text-white p-4 rounded-lg">
@@ -247,14 +175,14 @@ export default function VoiceAdjuster({ claimId }: { claimId: string }) {
         <div className="bg-red-900/50 text-red-200 p-3 rounded-lg text-sm">{error}</div>
       )}
 
-      {/* Connection Controls */}
-      <div className="flex items-center gap-4">
+      {/* Connection Controls & Mode Badge */}
+      <div className="flex items-center gap-4 flex-wrap">
         {connectionState === "disconnected" || connectionState === "error" ? (
           <button
             onClick={connect}
             className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-medium"
           >
-            Connect Voice Session
+            Connect Session
           </button>
         ) : (
           <button
@@ -266,6 +194,7 @@ export default function VoiceAdjuster({ claimId }: { claimId: string }) {
           </button>
         )}
 
+        {/* Connection state indicator */}
         <div className="flex items-center gap-2 text-sm">
           <div
             className={`w-3 h-3 rounded-full ${
@@ -281,8 +210,43 @@ export default function VoiceAdjuster({ claimId }: { claimId: string }) {
           <span className="text-slate-400 capitalize">{connectionState}</span>
         </div>
 
-        {micPermission === "denied" && (
-          <span className="text-red-400 text-sm">Microphone access denied</span>
+        {/* Mode badge */}
+        {isConnected && (
+          <span
+            className={`px-3 py-1 rounded-full text-xs font-medium ${
+              sessionMode === "voice_live"
+                ? "bg-green-900 text-green-300"
+                : "bg-amber-900 text-amber-300"
+            }`}
+          >
+            {sessionMode === "voice_live" ? "Voice Live" : "Text Mode"}
+          </span>
+        )}
+
+        {/* Microphone control — only active in voice_live mode */}
+        {isConnected && (
+          <button
+            disabled={!audioEnabled}
+            className={`px-3 py-1.5 rounded-lg text-sm font-medium ${
+              audioEnabled
+                ? "bg-green-700 hover:bg-green-600 text-white"
+                : "bg-slate-700 text-slate-500 cursor-not-allowed"
+            }`}
+            title={
+              audioEnabled
+                ? "Microphone active"
+                : "Voice Live not configured — microphone unavailable"
+            }
+          >
+            {audioEnabled ? "Mic On" : "Mic Off"}
+          </button>
+        )}
+
+        {/* Microphone unavailable notice */}
+        {isConnected && isTextMode && (
+          <span className="text-amber-400 text-xs">
+            Microphone unavailable — Voice Live not configured. Use text input below.
+          </span>
         )}
       </div>
 
@@ -290,7 +254,7 @@ export default function VoiceAdjuster({ claimId }: { claimId: string }) {
       <div className="bg-slate-900 rounded-lg border border-slate-700 h-96 overflow-y-auto p-4 space-y-3">
         {transcript.length === 0 ? (
           <p className="text-slate-500 text-center mt-20">
-            Connect to start the voice session. Speak or type questions about the claim.
+            Connect to start a session. Type questions about the claim below.
           </p>
         ) : (
           transcript.map((entry, i) => (
@@ -320,20 +284,24 @@ export default function VoiceAdjuster({ claimId }: { claimId: string }) {
         <div ref={transcriptEndRef} />
       </div>
 
-      {/* Text Fallback Input */}
+      {/* Text Input — always enabled when connected */}
       <div className="flex gap-3">
         <input
           type="text"
           value={textInput}
           onChange={(e) => setTextInput(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && sendTextMessage()}
-          placeholder='Type a question, e.g. "What is the fraud score?"'
-          disabled={connectionState !== "connected"}
+          placeholder={
+            isConnected
+              ? 'Type a question, e.g. "What is the fraud score?"'
+              : "Connect to start asking questions"
+          }
+          disabled={!isConnected}
           className="flex-1 bg-slate-800 text-white px-4 py-2 rounded-lg border border-slate-600 focus:border-blue-500 focus:outline-none disabled:opacity-50"
         />
         <button
           onClick={sendTextMessage}
-          disabled={connectionState !== "connected" || !textInput.trim()}
+          disabled={!isConnected || !textInput.trim()}
           className="bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded-lg disabled:opacity-50"
         >
           Send
