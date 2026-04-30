@@ -524,6 +524,27 @@ See `evaluation/results/latest.json` for the full machine-readable report.
 
 ---
 
+## Demo Data
+
+A small pack of synthetic, non-PII claim bundles for manual frontend testing and live Azure validation:
+
+```bash
+python scripts/generate_demo_assets.py           # generates demo_assets/
+pytest tests/unit/test_demo_assets.py -v          # validates the bundles
+```
+
+Three deterministic scenarios are generated:
+
+| Bundle | Claimant | Expected Outcome | Description |
+|---|---|---|---|
+| `claim_001_approve` | Maria Thompson | APPROVED | Minor front damage, deer collision |
+| `claim_002_escalate` | James Chen | ESCALATED | Rear-end collision, high repair estimate |
+| `claim_003_fraud_review` | Diana Brooks | FRAUD_REVIEW | Inconsistent damage description |
+
+Each bundle contains `claim_form.pdf`, 2 placeholder damage photos, and a `voice_statement.txt` transcript. See `demo_assets/README.md` for upload instructions.
+
+---
+
 ## Key Design Decisions
 
 **Why Durable Functions over a simple queue?** The pipeline has 7 sequential steps with individual failure modes. Durable Functions provides checkpointed execution — if step 4 fails, the orchestrator retries from step 4, not from step 1. On Flex Consumption, you pay only for execution time, not idle time.
