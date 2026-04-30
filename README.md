@@ -19,12 +19,22 @@ This is not a dashboard wrapper around Azure OpenAI. It is a production-grade ag
 - Multi-agent orchestration with Foundry Agent Service (GA as of March 2026)
 - Real document processing with Azure AI Document Intelligence custom models trained on ACORD forms
 - Visual evidence analysis with Azure AI Content Understanding (multimodal: image + PDF + audio)
-- Real-time voice adjuster interface via Azure Speech Voice Live API + Photo Avatar
+- Real-time voice adjuster interface via Azure Speech Voice Live API + MCP tool integration
 - Human-in-loop escalation with confidence-gated routing
 - Full observability via AgentOps tracing on every agent step
 - Async pipeline pattern (202-accepted + polling) via Azure Durable Functions Flex Consumption
 
 **Vertical scope:** Auto physical damage claims only. One line of business, done properly.
+
+### Implementation Status
+
+| Phase | Description | Status |
+|---|---|---|
+| Phase 1 | Foundation & Ingestion (Doc Intelligence, Content Understanding, Speech STT, Translator) | Done |
+| Phase 2 | Durable Functions Pipeline (FastAPI, Cosmos DB, SignalR, Next.js dashboard) | Done |
+| Phase 3 | Foundry Agents (4 real agent classes, Azure Search, tracing, extraction eval) | Done |
+| Phase 4 | Voice Live Interface (adjuster copilot, MCP adapter, claim lookup tools) | Done |
+| Phase 5 | Frontend Polish, Evaluation, README | Done |
 
 ---
 
@@ -131,106 +141,94 @@ This is not a dashboard wrapper around Azure OpenAI. It is a production-grade ag
 ```
 claimpilot/
 ├── README.md
+├── CHANGELOG.md
 ├── LICENSE
 ├── .env.example
 ├── pyproject.toml
-├── docker-compose.yml
 │
 ├── infra/                          # Azure Bicep IaC
 │   ├── main.bicep
-│   ├── modules/
-│   │   ├── foundry.bicep           # AI Foundry workspace + connections
-│   │   ├── doc-intelligence.bicep
-│   │   ├── speech.bicep
-│   │   ├── cosmos.bicep
-│   │   ├── functions.bicep
-│   │   ├── signalr.bicep
-│   │   └── search.bicep
-│   └── parameters/
-│       ├── dev.bicepparam
-│       └── prod.bicepparam
+│   ├── modules/                    # 12 modules + RBAC
+│   └── parameters/dev.bicepparam
 │
 ├── backend/
-│   ├── pipeline/                   # Durable Functions orchestration
-│   │   ├── orchestrator.py         # Main Durable orchestrator function
-│   │   ├── activities/
-│   │   │   ├── ingestion.py        # Blob trigger → Doc Intelligence + CU + Speech
-│   │   │   ├── classification.py   # Classifier agent activity
-│   │   │   ├── extraction.py       # Extractor agent + Foundry IQ validation
-│   │   │   ├── fraud_detection.py  # Fraud detection agent activity
-│   │   │   ├── reasoning.py        # Decision agent activity (GPT-5.4)
-│   │   │   └── notification.py     # SignalR event broadcast
-│   │   └── status.py               # HTTP polling endpoint
+│   ├── core/
+│   │   ├── config.py               # pydantic-settings (all Azure endpoints + model IDs)
+│   │   └── tracing.py              # AgentOps / App Insights tracing
+│   │
+│   ├── models/
+│   │   ├── ingestion.py            # DocumentField, ImageAnalysisResult, VoiceTranscript
+│   │   ├── claim.py                # ClaimRecord, PipelineStep, agent output models
+│   │   └── voice_live.py           # Voice Live session, event, avatar models
 │   │
 │   ├── agents/                     # Foundry Agent definitions
-│   │   ├── base.py                 # Shared agent client setup
-│   │   ├── classifier_agent.py
-│   │   ├── extractor_agent.py
-│   │   ├── fraud_agent.py
-│   │   └── decision_agent.py
+│   │   ├── base.py                 # FoundryAgentClient: JSON parsing + retry + Pydantic validation
+│   │   ├── classifier_agent.py     # Claim type + routing confidence
+│   │   ├── extractor_agent.py      # Structured field extraction + validation
+│   │   ├── fraud_agent.py          # Multi-signal fraud risk scoring
+│   │   └── decision_agent.py       # Traceable adjudication with reasoning chain
 │   │
-│   ├── services/                   # Azure service wrappers
+│   ├── services/
 │   │   ├── document_intelligence.py
 │   │   ├── content_understanding.py
-│   │   ├── speech.py               # STT + Voice Live WebSocket handler
-│   │   ├── translator.py
-│   │   └── search.py               # Foundry IQ / AI Search client
+│   │   ├── speech.py               # STT batch transcription
+│   │   ├── translator.py           # Azure Translator with English passthrough
+│   │   ├── search.py               # Azure AI Search (policies + claims-history indexes)
+│   │   ├── claim_state_store.py    # Cosmos DB persistence
+│   │   ├── claim_lookup_tool.py    # Voice Live tool: claim data from Cosmos
+│   │   ├── voice_live.py           # Voice Live session service
+│   │   ├── signalr.py              # Real-time pipeline events
+│   │   └── blob_storage.py         # File upload to claims-intake container
 │   │
-│   ├── domains/
-│   │   └── auto_damage/            # Domain configuration (JSON-driven)
-│   │       ├── config.json
-│   │       ├── classification_categories.json
-│   │       ├── extraction_schema.json
-│   │       └── validation_rules.json
+│   ├── mcp/
+│   │   └── claim_server.py         # MCP-compatible claim lookup adapter
 │   │
-│   ├── models/                     # Pydantic data models
-│   │   ├── claim.py
-│   │   ├── extraction.py
-│   │   └── decision.py
+│   ├── pipeline/
+│   │   ├── orchestrator.py         # 8-step pipeline with real agent activities
+│   │   └── activities/             # classification, extraction, fraud_detection, reasoning
 │   │
-│   └── api/                        # FastAPI (local dev + test harness)
-│       ├── main.py
-│       ├── routes/
-│       │   ├── claims.py
-│       │   ├── status.py
-│       │   └── voice.py
-│       └── middleware.py
+│   ├── api/
+│   │   ├── app.py                  # FastAPI application factory
+│   │   ├── routes.py               # POST /claims + GET /claims/{id}/status
+│   │   └── adjuster_routes.py      # Session URL, WebSocket relay, queue, claim context
+│   │
+│   └── domains/auto_damage/        # JSON-driven domain config
 │
 ├── frontend/                       # Next.js 15 App Router
-│   ├── app/
-│   │   ├── layout.tsx
-│   │   ├── page.tsx                # Claim submission
-│   │   ├── claims/
-│   │   │   ├── [id]/
-│   │   │   │   ├── page.tsx        # Claim detail + pipeline status
-│   │   │   │   └── decision.tsx    # Traceable decision viewer
-│   │   │   └── page.tsx            # Claims list
-│   │   └── adjuster/
-│   │       └── page.tsx            # Voice Live adjuster copilot
-│   ├── components/
-│   │   ├── pipeline-tracker.tsx    # Real-time 7-step pipeline viz
-│   │   ├── decision-viewer.tsx     # Evidence-linked reasoning display
-│   │   ├── voice-adjuster.tsx      # Voice Live WebSocket client
-│   │   └── upload-zone.tsx         # Multimodal file upload
-│   └── lib/
-│       ├── api.ts
-│       └── signalr.ts
+│   ├── src/
+│   │   ├── app/
+│   │   │   ├── page.tsx            # Claim submission
+│   │   │   ├── claims/[claimId]/   # Claim detail + pipeline status + decision viewer
+│   │   │   └── adjuster/
+│   │   │       ├── [claimId]/      # Voice Live adjuster session
+│   │   │       └── queue/          # Escalated claims queue
+│   │   ├── components/
+│   │   │   ├── ClaimUploadForm.tsx
+│   │   │   ├── ClaimStatusPage.tsx
+│   │   │   ├── PipelineTracker.tsx
+│   │   │   ├── DecisionViewer.tsx
+│   │   │   └── voice-adjuster.tsx
+│   │   └── lib/
+│   │       ├── api.ts
+│   │       └── signalr.ts
 │
-├── evaluation/                     # Azure AI Evaluation harness
+├── evaluation/
+│   ├── generate_acord_synthetic.py # 200 PDFs + ground-truth JSON + training samples
+│   ├── generate_search_fixtures.py # 50 policies + 100 claims history records
+│   ├── evaluate_extraction.py      # Field-level F1 against ACORD ground truth
+│   ├── evaluate_fraud.py           # Fraud detection precision/recall
+│   ├── evaluate_decision.py        # Decision groundedness metrics
+│   ├── run_full_evaluation.py      # Combined report → results/latest.json
 │   ├── datasets/
-│   │   └── acord_synthetic/        # Synthetic ACORD forms for testing
-│   ├── evaluate_extraction.py
-│   ├── evaluate_fraud.py
-│   └── evaluate_decision.py
+│   │   ├── acord_synthetic/        # forms/, labels/, training/
+│   │   └── search_fixtures/        # policies.json, claims_history.json
+│   └── results/latest.json
+│
+├── scripts/                        # CLI smoke tests for each Azure service
 │
 └── tests/
-    ├── unit/
-    │   ├── test_classifier_agent.py
-    │   ├── test_extractor_agent.py
-    │   └── test_fraud_agent.py
-    └── integration/
-        ├── test_pipeline_e2e.py
-        └── test_voice_live.py
+    ├── unit/                       # 171+ mocked tests (no Azure needed)
+    └── integration/                # Live tests (RUN_AZURE_INTEGRATION=1)
 ```
 
 ---
@@ -491,12 +489,12 @@ python backend/services/document_intelligence.py --train --dataset evaluation/da
 
 ```bash
 # Terminal 1: Backend (FastAPI dev server)
-uvicorn backend.api.main:app --reload --port 8000
+uvicorn backend.api.app:app --reload --port 8000
 
 # Terminal 2: Frontend
 cd frontend && npm run dev
 
-# Terminal 3: Durable Functions (local emulation)
+# Terminal 3: Durable Functions (local emulation, production only)
 cd backend/pipeline && func start
 ```
 
@@ -506,16 +504,55 @@ Open `http://localhost:3000` — upload a synthetic claim form + photo to see th
 
 ## Evaluation Results (Synthetic Dataset, n=200 ACORD forms)
 
-| Metric | Score |
-|---|---|
-| Doc Intelligence field extraction F1 | 0.94 |
-| Content Understanding image classification accuracy | 0.89 |
-| Fraud detection precision | 0.87 |
-| Fraud detection recall | 0.82 |
-| Decision groundedness (Azure AI Eval) | 4.2 / 5.0 |
-| Mean pipeline latency (p50) | 47s |
-| Mean pipeline latency (p95) | 91s |
-| Human escalation rate | 12% |
+Results from `python -m evaluation.run_full_evaluation --mocked`:
+
+| Metric | Mocked Score | Target |
+|---|---|---|
+| Doc Intelligence field extraction F1 | 1.00 | >= 0.90 |
+| Content Understanding image classification accuracy | 0.89 | >= 0.85 |
+| Fraud detection precision | 0.81 | >= 0.80 |
+| Fraud detection recall | 0.87 | >= 0.80 |
+| Fraud detection F1 | 0.84 | >= 0.80 |
+| Decision groundedness | 0.90 | >= 0.80 |
+| Mean pipeline latency (p50) | 3.2s* | < 60s |
+| Mean pipeline latency (p95) | 8.7s* | < 120s |
+| Human escalation rate | 25% | < 30% |
+
+*Mocked benchmarks. Live latency requires `RUN_AZURE_INTEGRATION=1` with configured Azure resources.
+
+See `evaluation/results/latest.json` for the full machine-readable report.
+
+---
+
+## Demo Data
+
+A small pack of synthetic, non-PII claim bundles for manual frontend testing and live Azure validation:
+
+```bash
+python scripts/generate_demo_assets.py           # generates demo_assets/
+pytest tests/unit/test_demo_assets.py -v          # validates the bundles
+```
+
+Three deterministic scenarios are generated:
+
+| Bundle | Claimant | Expected Outcome | Description |
+|---|---|---|---|
+| `claim_001_approve` | Maria Thompson | APPROVED | Minor front damage, deer collision |
+| `claim_002_escalate` | James Chen | ESCALATED | Rear-end collision, high repair estimate |
+| `claim_003_fraud_review` | Diana Brooks | FRAUD_REVIEW | Inconsistent damage description |
+
+Each bundle contains `claim_form.pdf`, 2 placeholder damage photos, and a `voice_statement.txt` transcript. See `demo_assets/README.md` for upload instructions.
+
+---
+
+## Live Azure Validation
+
+Deployed on Azure Container Apps (swedencentral) with real Foundry agents (GPT-4o) for live end-to-end validation:
+
+- **API**: `https://claimpilot-devca-api.yellowsmoke-6e6692a2.swedencentral.azurecontainerapps.io`
+- **Frontend**: `https://claimpilot-devca-frontend.yellowsmoke-6e6692a2.swedencentral.azurecontainerapps.io`
+
+These are dev-validation endpoints, not production SLA. See `docs/deployment/v1.0.0-containerapps-live-validation.md` for full deployment details.
 
 ---
 

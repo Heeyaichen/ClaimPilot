@@ -1,0 +1,16 @@
+{
+  "claimant_name": "Diana Brooks",
+  "policy_number": "DB55309128",
+  "claim_id": "claim_003_fraud_review",
+  "scenario": "Inconsistent damage description \u2014 flagged for fraud review",
+  "expected_outcome": "FRAUD_REVIEW",
+  "files": {
+    "claim_form": "claim_form.pdf",
+    "photos": [
+      "photo_1.jpg",
+      "photo_2.jpg"
+    ],
+    "voice_transcript": "voice_statement.txt",
+    "audio": "optional \u2014 not included in this pack"
+  }
+}

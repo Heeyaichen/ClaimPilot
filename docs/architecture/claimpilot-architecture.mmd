@@ -1,0 +1,68 @@
+graph TB
+    subgraph INGESTION["INGESTION LAYER"]
+        FORM["Claim Form<br/>(PDF/Scan)"]
+        PHOTOS["Accident<br/>Photos"]
+        VOICE["Voice<br/>Statement"]
+        DOC_INT["Azure Doc Intelligence<br/>(Custom ACORD Model)"]
+        CU["Azure Content<br/>Understanding"]
+        SPEECH["Azure Speech STT<br/>+ Translator"]
+    end
+
+    subgraph ORCHESTRATION["ORCHESTRATION LAYER — Azure AI Foundry Agent Service"]
+        CLASSIFIER["Classifier<br/>Agent"]
+        EXTRACTOR["Extractor<br/>Agent"]
+        FRAUD["Fraud Detection<br/>Agent"]
+        DECISION["Decision Agent<br/>(GPT-5.4)"]
+        SEARCH["Foundry IQ<br/>(Azure AI Search)"]
+        COSMOS["Cosmos DB<br/>(Claim State)"]
+    end
+
+    subgraph INTERFACE["INTERFACE LAYER"]
+        NEXTJS["Next.js 15<br/>Dashboard"]
+        VOICE_LIVE["Voice Live API<br/>Adjuster Copilot"]
+        SIGNALR["SignalR<br/>Real-time Events"]
+        MCP["MCP Claim<br/>Server"]
+    end
+
+    subgraph OBSERVABILITY["OBSERVABILITY LAYER"]
+        TRACING["AgentOps<br/>Tracing"]
+        MONITOR["Azure Monitor<br/>+ App Insights"]
+    end
+
+    FORM --> DOC_INT
+    PHOTOS --> CU
+    VOICE --> SPEECH
+
+    DOC_INT --> CLASSIFIER
+    CU --> CLASSIFIER
+    SPEECH --> CLASSIFIER
+
+    CLASSIFIER --> EXTRACTOR
+    EXTRACTOR --> FRAUD
+    FRAUD --> DECISION
+
+    SEARCH --> EXTRACTOR
+    SEARCH --> FRAUD
+    COSMOS --> DECISION
+
+    DECISION --> COSMOS
+    DECISION --> SIGNALR
+    SIGNALR --> NEXTJS
+
+    COSMOS --> MCP
+    MCP --> VOICE_LIVE
+    NEXTJS --> VOICE_LIVE
+
+    TRACING --> CLASSIFIER
+    TRACING --> EXTRACTOR
+    TRACING --> FRAUD
+    TRACING --> DECISION
+    MONITOR --> TRACING
+
+    classDef azure fill:#0078D4,stroke:#fff,color:#fff
+    classDef agent fill:#1D9E75,stroke:#fff,color:#fff
+    classDef frontend fill:#000,stroke:#fff,color:#fff
+
+    class DOC_INT,CU,SPEECH,SEARCH,COSMOS,SIGNALR azure
+    class CLASSIFIER,EXTRACTOR,FRAUD,DECISION,MCP agent
+    class NEXTJS,VOICE_LIVE frontend
