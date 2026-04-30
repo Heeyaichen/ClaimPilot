@@ -129,7 +129,6 @@ export default function VoiceAdjuster({ claimId }: { claimId: string }) {
     ws.onopen = () => {
       setConnectionState("connected");
       addTranscript("system", "Connected to voice session");
-      startMicrophone();
     };
 
     ws.onmessage = (event) => {
@@ -138,11 +137,20 @@ export default function VoiceAdjuster({ claimId }: { claimId: string }) {
 
         if (data.type === "session.config") {
           addTranscript("system", `Session configured: ${data.session_id}`);
+          // Only start microphone if server reports Voice Live is ready
+          if (data.config?.voice) {
+            startMicrophone();
+          }
           return;
         }
 
         if (data.type === "status") {
           addTranscript("system", data.message || `Status: ${data.status}`);
+          return;
+        }
+
+        if (data.type === "warning") {
+          addTranscript("system", data.message || "Warning");
           return;
         }
 

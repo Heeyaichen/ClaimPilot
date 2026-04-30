@@ -172,13 +172,31 @@ async def voice_websocket(websocket: WebSocket, claim_id: str) -> None:
         logger.info("Text fallback session started: claim=%s", claim_id)
 
     # Message loop — handles both Voice Live events and text fallback
+    audio_warned = False
     try:
         while True:
-            data = await websocket.receive_text()
+            message = await websocket.receive()
+
+            # Handle binary frames (audio PCM16 from browser microphone)
+            if "bytes" in message:
+                if not audio_warned:
+                    audio_warned = True
+                    await websocket.send_json({
+                        "type": "warning",
+                        "message": "Audio streaming unavailable; use text fallback.",
+                    })
+                continue
+
+            # Handle text frames (JSON commands)
+            text = message.get("text", "")
             try:
-                event = json.loads(data)
+                event = json.loads(text)
             except json.JSONDecodeError:
-                await websocket.send_json({"type": "error", "message": "Invalid JSON"})
+                await websocket.send_json({
+                    "type": "error",
+                    "recoverable": True,
+                    "message": "Invalid JSON",
+                })
                 continue
 
             # Handle text fallback input: {"type": "text.input", "text": "..."}

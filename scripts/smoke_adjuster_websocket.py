@@ -16,7 +16,7 @@ import sys
 import urllib.request
 
 
-async def smoke_test(api_url: str, claim_id: str) -> int:
+async def smoke_test(api_url: str, claim_id: str, hold_seconds: int = 0, send_text: str = "") -> int:
     """Connect to WebSocket, send a text query, print responses."""
     # Strip trailing slash
     api_url = api_url.rstrip("/")
@@ -74,7 +74,7 @@ async def smoke_test(api_url: str, claim_id: str) -> int:
                 print(f"  Session ID: {msg.get('session_id', '')}")
 
             # 4. Send text fallback query
-            query = "what's the fraud score on this claim?"
+            query = send_text or "what's the fraud score on this claim?"
             print(f"\nSending: {query}")
             await ws.send(json.dumps({"type": "text.input", "text": query}))
 
@@ -105,6 +105,19 @@ async def smoke_test(api_url: str, claim_id: str) -> int:
                 else:
                     print(f"  Received: {resp_type} — {json.dumps(resp_data)[:120]}")
 
+            # 6. Hold connection open to verify stability
+            if hold_seconds > 0:
+                print(f"\nHolding connection open for {hold_seconds}s ...")
+                try:
+                    await asyncio.wait_for(ws.wait_closed(), timeout=hold_seconds)
+                    print("  Connection closed unexpectedly during hold!")
+                    return 1
+                except TimeoutError:
+                    print(f"  Connection survived {hold_seconds}s hold")
+                except Exception as exc:
+                    print(f"  Connection error during hold: {exc}")
+                    return 1
+
             print("\nSmoke test PASSED")
             return 0
 
@@ -117,9 +130,14 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Smoke test adjuster WebSocket")
     parser.add_argument("--api-url", required=True, help="API base URL (https://...)")
     parser.add_argument("--claim-id", required=True, help="Claim ID to test with")
+    parser.add_argument(
+        "--hold-seconds", type=int, default=0,
+        help="Hold connection open for N seconds to test stability",
+    )
+    parser.add_argument("--send-text", default="", help="Custom text query to send")
     args = parser.parse_args()
 
-    sys.exit(asyncio.run(smoke_test(args.api_url, args.claim_id)))
+    sys.exit(asyncio.run(smoke_test(args.api_url, args.claim_id, args.hold_seconds, args.send_text)))
 
 
 if __name__ == "__main__":
