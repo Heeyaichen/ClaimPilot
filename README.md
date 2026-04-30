@@ -545,6 +545,17 @@ Each bundle contains `claim_form.pdf`, 2 placeholder damage photos, and a `voice
 
 ---
 
+## Live Azure Validation
+
+Deployed on Azure Container Apps (swedencentral) with real Foundry agents (GPT-4o) for live end-to-end validation:
+
+- **API**: `https://claimpilot-devca-api.yellowsmoke-6e6692a2.swedencentral.azurecontainerapps.io`
+- **Frontend**: `https://claimpilot-devca-frontend.yellowsmoke-6e6692a2.swedencentral.azurecontainerapps.io`
+
+These are dev-validation endpoints, not production SLA. See `docs/deployment/v1.0.0-containerapps-live-validation.md` for full deployment details.
+
+---
+
 ## Key Design Decisions
 
 **Why Durable Functions over a simple queue?** The pipeline has 7 sequential steps with individual failure modes. Durable Functions provides checkpointed execution — if step 4 fails, the orchestrator retries from step 4, not from step 1. On Flex Consumption, you pay only for execution time, not idle time.

@@ -27,7 +27,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from evaluation.generate_acord_synthetic import AcordFormData, AcordPDF, render_pdf
+from evaluation.generate_acord_synthetic import AcordFormData, render_pdf  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Scenario definitions
@@ -58,7 +58,10 @@ SCENARIOS: list[dict[str, Any]] = [
             loss_date="2026-03-15",
             loss_time="09:30",
             loss_location="Springfield, IL",
-            loss_description="Front-end collision with deer on rural road. Bumper and hood damage. Airbags did not deploy.",
+            loss_description=(  # noqa: E501
+                "Front-end collision with deer on rural road. "
+                "Bumper and hood damage. Airbags did not deploy."
+            ),
             estimated_repair_amount=3400.00,
             coverage_type="Collision",
             claimant_first_name="Maria",
@@ -104,7 +107,10 @@ SCENARIOS: list[dict[str, Any]] = [
             loss_date="2026-01-10",
             loss_time="17:45",
             loss_location="San Jose, CA",
-            loss_description="Rear-end collision at stoplight. Other vehicle failed to stop. Significant trunk and rear bumper damage. Frame may be bent.",
+            loss_description=(  # noqa: E501
+                "Rear-end collision at stoplight. Other vehicle failed to stop. "
+                "Significant trunk and rear bumper damage. Frame may be bent."
+            ),
             estimated_repair_amount=18750.00,
             coverage_type="Collision",
             claimant_first_name="James",
@@ -204,7 +210,7 @@ def _create_placeholder_jpeg(
     # Draw label text — try a basic font, fall back to default
     try:
         font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 20)
-    except (OSError, IOError):
+    except OSError:
         font = ImageFont.load_default()
 
     # Center text in the rectangle
