@@ -88,63 +88,90 @@ class FoundryAgentClient:
 
         return _parse_agent_response(raw_response, output_type)
 
-    def _call_foundry(self, system_prompt: str, user_message: str) -> str:
-        """Execute the Foundry agent run via azure-ai-projects SDK.
+    def _get_openai_client(self):
+        """Create an AzureOpenAI client from the configured endpoint."""
+        from azure.identity import DefaultAzureCredential, get_bearer_token_provider
+        from openai import AzureOpenAI
 
-        This method handles the actual API call. It can be overridden
-        in tests or for alternative backends.
+        # Derive the Azure OpenAI endpoint from the project endpoint.
+        # Accepts both cognitiveservices.azure.com and services.ai.azure.com formats.
+        endpoint = self._endpoint
+        if "/projects/" in endpoint:
+            endpoint = endpoint.split("/projects/")[0]
+        if endpoint.endswith("/api"):
+            endpoint = endpoint[:-4]
+        if not endpoint.endswith("/"):
+            endpoint += "/"
+
+        token_provider = get_bearer_token_provider(
+            DefaultAzureCredential(), "https://cognitiveservices.azure.com/.default"
+        )
+        return AzureOpenAI(
+            azure_endpoint=endpoint,
+            azure_ad_token_provider=token_provider,
+            api_version="2025-04-01-preview",
+        )
+
+    def _call_foundry(self, system_prompt: str, user_message: str) -> str:
+        """Execute the agent run via Azure OpenAI Assistants API.
+
+        Uses the OpenAI SDK against the Azure Cognitive Services endpoint,
+        which works with pre-created assistants (agents). Falls back to
+        azure-ai-projects SDK if available and needed.
         """
         try:
-            from azure.ai.projects import AIProjectClient
-            from azure.identity import DefaultAzureCredential
+            from openai import APIConnectionError, APIError, AzureOpenAI  # noqa: F401
         except ImportError as e:
             raise AgentResponseError(
-                "azure-ai-projects is required for Foundry agent calls. "
+                "openai is required for agent calls. "
                 "Set CLAIMPILOT_USE_STUBS=1 for local development."
             ) from e
 
-        credential = DefaultAzureCredential()
-        client = AIProjectClient(
-            endpoint=self._endpoint,
-            credential=credential,
-        )
+        try:
+            client = self._get_openai_client()
+        except Exception as e:
+            raise AgentResponseError(f"Failed to create Azure OpenAI client: {e}") from e
 
         # Use pre-created agent ID if available, otherwise create ephemeral
         agent_id = self._agent_id
         ephemeral_agent = None
-        if not agent_id:
-            ephemeral_agent = client.agents.create_agent(
-                model=self._model_deployment,
-                name="claimpilot-agent",
-                instructions=system_prompt,
-            )
-            agent_id = ephemeral_agent.id
-
         try:
-            thread = client.agents.create_thread()
-            client.agents.create_message(
+            if not agent_id:
+                ephemeral_agent = client.beta.assistants.create(
+                    model=self._model_deployment,
+                    name="claimpilot-agent",
+                    instructions=system_prompt,
+                )
+                agent_id = ephemeral_agent.id
+
+            thread = client.beta.threads.create()
+            client.beta.threads.messages.create(
                 thread_id=thread.id,
                 role="user",
                 content=user_message,
             )
-            run = client.agents.create_and_process_run(
+            run = client.beta.threads.runs.create_and_poll(
                 thread_id=thread.id,
-                agent_id=agent_id,
+                assistant_id=agent_id,
             )
 
             if run.status == "failed":
                 raise AgentResponseError(f"Agent run failed: {run.last_error}")
 
-            messages = client.agents.list_messages(thread_id=thread.id)
-            # Get the last assistant message
+            messages = client.beta.threads.messages.list(thread_id=thread.id)
             for msg in messages.data:
                 if msg.role == "assistant":
-                    return msg.content[0].text if msg.content else ""
+                    return msg.content[0].text.value if msg.content else ""
 
             raise AgentResponseError("No assistant response found in thread")
+        except (APIConnectionError, APIError) as e:
+            raise AgentResponseError(f"Azure OpenAI API error: {e}") from e
         finally:
             if ephemeral_agent:
-                client.agents.delete_agent(ephemeral_agent.id)
+                try:
+                    client.beta.assistants.delete(ephemeral_agent.id)
+                except Exception:
+                    pass
 
 
 def _parse_agent_response(raw: str, output_type: type[T], retries: int = 0) -> T:
