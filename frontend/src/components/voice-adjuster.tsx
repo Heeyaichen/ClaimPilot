@@ -45,7 +45,12 @@ export default function VoiceAdjuster({ claimId }: { claimId: string }) {
   }, [transcript]);
 
   const addTranscript = useCallback((role: TranscriptEntry["role"], text: string) => {
-    setTranscript((prev) => [...prev, { role, text, timestamp: new Date() }]);
+    setTranscript((prev) => {
+      // Deduplicate: skip if last entry has same role and text
+      const last = prev[prev.length - 1];
+      if (last && last.role === role && last.text === text) return prev;
+      return [...prev, { role, text, timestamp: new Date() }];
+    });
   }, []);
 
   const startMicrophone = useCallback(async () => {
@@ -142,6 +147,15 @@ export default function VoiceAdjuster({ claimId }: { claimId: string }) {
 
         if (data.type === "error") {
           setError(data.message || "Session error");
+          return;
+        }
+
+        // Voice Live user speech transcription
+        if (data.type === "conversation.item.input_audio_transcription.completed") {
+          const text = data.transcript || "";
+          if (text) {
+            addTranscript("user", text);
+          }
           return;
         }
 
