@@ -16,7 +16,13 @@ import sys
 import urllib.request
 
 
-async def smoke_test(api_url: str, claim_id: str, hold_seconds: int = 0, send_text: str = "") -> int:
+async def smoke_test(
+    api_url: str,
+    claim_id: str,
+    hold_seconds: int = 0,
+    send_text: str = "",
+    dump_events: bool = False,
+) -> int:
     """Connect to WebSocket, send a text query, print responses."""
     # Strip trailing slash
     api_url = api_url.rstrip("/")
@@ -80,7 +86,7 @@ async def smoke_test(api_url: str, claim_id: str, hold_seconds: int = 0, send_te
 
             # 5. Read response(s)
             print("Waiting for response ...")
-            for _ in range(5):
+            for _ in range(10):
                 try:
                     response = await asyncio.wait_for(ws.recv(), timeout=10)
                 except TimeoutError:
@@ -94,16 +100,32 @@ async def smoke_test(api_url: str, claim_id: str, hold_seconds: int = 0, send_te
                     continue
 
                 resp_type = resp_data.get("type", "")
+
+                if dump_events:
+                    print(f"  EVENT: {resp_type} — {json.dumps(resp_data)[:200]}")
+
                 if resp_type == "transcript":
                     role = resp_data.get("role", "?")
                     text = resp_data.get("text", "")
                     print(f"  [{role}] {text}")
-                    break
+                    if not dump_events:
+                        break
+                elif resp_type == "transcript.user":
+                    print(f"  [user transcript] {resp_data.get('text', '')}")
+                    if not dump_events:
+                        break
+                elif resp_type == "transcript.user.delta":
+                    pass  # in-progress, skip unless dumping
+                elif resp_type == "speech.started":
+                    print("  [speech detected]")
+                elif resp_type == "speech.stopped":
+                    pass
                 elif resp_type == "error":
                     print(f"  ERROR: {resp_data.get('message', '')}")
                     return 1
                 else:
-                    print(f"  Received: {resp_type} — {json.dumps(resp_data)[:120]}")
+                    if not dump_events:
+                        print(f"  Received: {resp_type} — {json.dumps(resp_data)[:120]}")
 
             # 6. Hold connection open to verify stability
             if hold_seconds > 0:
@@ -135,9 +157,13 @@ def main() -> None:
         help="Hold connection open for N seconds to test stability",
     )
     parser.add_argument("--send-text", default="", help="Custom text query to send")
+    parser.add_argument(
+        "--dump-events", action="store_true",
+        help="Print all received Voice Live event types",
+    )
     args = parser.parse_args()
 
-    sys.exit(asyncio.run(smoke_test(args.api_url, args.claim_id, args.hold_seconds, args.send_text)))
+    sys.exit(asyncio.run(smoke_test(args.api_url, args.claim_id, args.hold_seconds, args.send_text, args.dump_events)))
 
 
 if __name__ == "__main__":

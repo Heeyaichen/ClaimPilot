@@ -63,6 +63,8 @@ class Settings(BaseSettings):
     voice_live_api_version: str = "2025-10-01"
     voice_live_model: str = "gpt-realtime"
     voice_live_voice: str = "alloy"
+    voice_live_transcription_model: str = "gpt-4o-mini-transcribe"
+    voice_live_transcription_language: str = "en-US"
     voice_live_enable_mcp: bool = False
     voice_live_mcp_server_url: str = ""
     adjuster_session_token_secret: str = "dev-secret-change-in-prod"

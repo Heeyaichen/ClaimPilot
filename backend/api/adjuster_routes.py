@@ -221,6 +221,57 @@ async def _voice_live_relay(
                     logger.exception("Tool call error: claim=%s", claim_id)
                 continue
 
+            # Normalize user speech transcription events
+            if event_type == "conversation.item.input_audio_transcription.completed":
+                text = event.get("transcript", "")
+                if text:
+                    try:
+                        await websocket.send_json({
+                            "type": "transcript.user",
+                            "text": text,
+                            "item_id": event.get("item_id", ""),
+                        })
+                    except Exception:
+                        stop.set()
+                        break
+                continue
+
+            if event_type == "conversation.item.input_audio_transcription.delta":
+                try:
+                    await websocket.send_json({
+                        "type": "transcript.user.delta",
+                        "delta": event.get("delta", ""),
+                        "item_id": event.get("item_id", ""),
+                    })
+                except Exception:
+                    stop.set()
+                    break
+                continue
+
+            if event_type == "conversation.item.input_audio_transcription.failed":
+                logger.warning(
+                    "Input transcription failed: %s",
+                    event.get("error", {}).get("message", "unknown"),
+                )
+                continue
+
+            # Forward speech detection as normalized events
+            if event_type == "input_audio_buffer.speech_started":
+                try:
+                    await websocket.send_json({"type": "speech.started"})
+                except Exception:
+                    stop.set()
+                    break
+                continue
+
+            if event_type == "input_audio_buffer.speech_stopped":
+                try:
+                    await websocket.send_json({"type": "speech.stopped"})
+                except Exception:
+                    stop.set()
+                    break
+                continue
+
             # Forward everything else to browser
             try:
                 await websocket.send_json(event)

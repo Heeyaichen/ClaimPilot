@@ -122,6 +122,10 @@ class VoiceLiveBridge:
                     "prefix_padding_ms": 300,
                     "silence_duration_ms": 500,
                 },
+                "input_audio_transcription": {
+                    "model": settings.voice_live_transcription_model,
+                    "language": settings.voice_live_transcription_language,
+                },
                 "tools": vl_tools,
             },
         }

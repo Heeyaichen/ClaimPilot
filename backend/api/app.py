@@ -10,7 +10,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend.api.adjuster_routes import router as adjuster_router
 from backend.api.routes import router
 
-ALLOWED_ORIGINS = os.environ.get("CORS_ALLOWED_ORIGINS", "").split(",") if os.environ.get("CORS_ALLOWED_ORIGINS") else []
+_cors_raw = os.environ.get("CORS_ALLOWED_ORIGINS", "")
+ALLOWED_ORIGINS = _cors_raw.split(",") if _cors_raw else []
 
 
 def create_app() -> FastAPI:

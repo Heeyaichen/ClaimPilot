@@ -24,6 +24,7 @@ export default function VoiceAdjuster({ claimId }: { claimId: string }) {
   const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
   const [textInput, setTextInput] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [isListening, setIsListening] = useState(false);
 
   const wsRef = useRef<WebSocket | null>(null);
   const transcriptEndRef = useRef<HTMLDivElement>(null);
@@ -156,6 +157,30 @@ export default function VoiceAdjuster({ claimId }: { claimId: string }) {
           if (text) {
             addTranscript("user", text);
           }
+          setIsListening(false);
+          return;
+        }
+
+        // Normalized user transcript events (from backend relay)
+        if (data.type === "transcript.user") {
+          if (data.text) {
+            addTranscript("user", data.text);
+          }
+          setIsListening(false);
+          return;
+        }
+        if (data.type === "transcript.user.delta") {
+          // In-progress typing — just mark listening
+          setIsListening(true);
+          return;
+        }
+
+        // Speech detection
+        if (data.type === "speech.started") {
+          setIsListening(true);
+          return;
+        }
+        if (data.type === "speech.stopped") {
           return;
         }
 
@@ -192,8 +217,9 @@ export default function VoiceAdjuster({ claimId }: { claimId: string }) {
           return;
         }
 
-        // Speech detection events
+        // Speech detection events (raw Voice Live — already handled via normalized events above)
         if (data.type === "input_audio_buffer.speech_started") {
+          setIsListening(true);
           return;
         }
         if (data.type === "input_audio_buffer.speech_stopped") {
@@ -233,6 +259,7 @@ export default function VoiceAdjuster({ claimId }: { claimId: string }) {
       setConnectionState("disconnected");
       setSessionMode("unknown");
       setAudioEnabled(false);
+      setIsListening(false);
       stopMicrophone();
       if (event.code !== 1000) {
         addTranscript("system", `Disconnected (code: ${event.code})`);
@@ -246,6 +273,7 @@ export default function VoiceAdjuster({ claimId }: { claimId: string }) {
     setConnectionState("disconnected");
     setSessionMode("unknown");
     setAudioEnabled(false);
+    setIsListening(false);
     stopMicrophone();
     addTranscript("system", "Session ended");
   }, [stopMicrophone, addTranscript]);
@@ -396,6 +424,13 @@ export default function VoiceAdjuster({ claimId }: { claimId: string }) {
               </div>
             </div>
           ))
+        )}
+        {isListening && (
+          <div className="flex justify-start">
+            <div className="bg-slate-700 text-slate-300 px-4 py-2 rounded-lg text-sm animate-pulse">
+              Listening...
+            </div>
+          </div>
         )}
         <div ref={transcriptEndRef} />
       </div>
