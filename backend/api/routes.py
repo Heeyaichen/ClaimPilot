@@ -129,6 +129,7 @@ async def get_claim_status(claim_id: str) -> Any:
         "classification_result",
         "extraction_result",
         "decision_result",
+        "evidence_consistency",
     ):
         value = getattr(record, field, None)
         if value is not None:

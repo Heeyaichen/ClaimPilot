@@ -29,6 +29,7 @@ from backend.pipeline.activities.extraction import run_extraction
 from backend.pipeline.activities.fraud_detection import run_fraud_detection
 from backend.pipeline.activities.reasoning import run_decision
 from backend.services.claim_state_store import ClaimStateStore
+from backend.services.evidence_validator import validate_evidence
 from backend.services.signalr import SignalRBroadcaster
 
 logger = logging.getLogger(__name__)
@@ -135,6 +136,20 @@ class ClaimOrchestrator:
                 voice_transcript=voice_output,
             )
 
+            # Evidence consistency validation
+            evidence_result = validate_evidence(
+                claimant_name_submitted=record.claimant_name,
+                policy_number_submitted=record.policy_number,
+                extracted_fields=extract_output,
+            )
+            evidence_output = evidence_result.model_dump()
+            self._store.update_step(
+                claim_id,
+                PipelineStep.EXTRACT_VALIDATE,
+                StepStatus.COMPLETED,
+                output={**extract_output, "evidence_consistency": evidence_output},
+            )
+
             # Step 7: FRAUD_SCREENING
             fraud_output = self._step_fraud_screening(
                 claim_id,
@@ -153,6 +168,7 @@ class ClaimOrchestrator:
                 doc_extraction=doc_output,
                 image_analysis=image_output,
                 voice_transcript=voice_output,
+                evidence_consistency=evidence_output,
             )
 
             # Update final record
@@ -164,6 +180,7 @@ class ClaimOrchestrator:
             record.extraction_result = extract_output
             record.fraud_result = fraud_output
             record.decision_result = decision_output
+            record.evidence_consistency = evidence_output
 
             # Map decision to claim status
             decision = decision_output.get("decision", "ESCALATE")
@@ -332,6 +349,7 @@ class ClaimOrchestrator:
         doc_extraction: dict[str, Any] | None = None,
         image_analysis: dict[str, Any] | None = None,
         voice_transcript: dict[str, Any] | None = None,
+        evidence_consistency: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Step 8: Final decision via DecisionAgent."""
         self._start_step(claim_id, PipelineStep.DECIDE)
@@ -343,6 +361,7 @@ class ClaimOrchestrator:
                 doc_extraction=doc_extraction,
                 image_analysis=image_analysis,
                 voice_transcript=voice_transcript,
+                evidence_consistency=evidence_consistency,
             )
             output = result.model_dump()
             self._complete_step(claim_id, PipelineStep.DECIDE, output)
