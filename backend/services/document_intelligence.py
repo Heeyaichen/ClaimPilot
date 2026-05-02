@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime
 from typing import Any
@@ -70,9 +71,23 @@ class DocumentIntelligenceService:
             body=AnalyzeDocumentRequest(url_source=blob_url),
             output_content_format="markdown",
         )
-        result = poller.result()
+        result = await asyncio.to_thread(poller.result)
 
         if not result.documents:
+            # prebuilt-layout and prebuilt-read return content but no documents
+            # Return extracted text without structured fields
+            if result.content:
+                logger.info(
+                    "No structured documents found, returning raw content (%d pages)",
+                    len(result.pages) if result.pages else 0,
+                )
+                return DocumentExtractionResult(
+                    markdown_content=result.content,
+                    fields={},
+                    model_id=self._model_id,
+                    pages=len(result.pages) if result.pages else 0,
+                    extracted_at=datetime.utcnow(),
+                )
             raise EmptyDocumentError(f"No documents found in analysis result for {blob_url}")
 
         doc = result.documents[0]

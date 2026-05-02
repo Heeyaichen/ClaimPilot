@@ -5,6 +5,7 @@ Run with: python -m backend.worker
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -40,7 +41,7 @@ def _process_claim(message_body: str) -> None:
 
     orchestrator = ClaimOrchestrator(state_store=store)
     try:
-        orchestrator.run_pipeline(record)
+        asyncio.run(orchestrator.run_pipeline(record))
         logger.info("Pipeline completed for claim %s", claim_id)
     except Exception:
         logger.exception("Pipeline failed for claim %s", claim_id)

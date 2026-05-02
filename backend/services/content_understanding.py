@@ -24,6 +24,10 @@ logger = logging.getLogger(__name__)
 _SCHEMA_PATH = Path(__file__).resolve().parent.parent / "domains" / "auto_damage" / "extraction_schema.json"
 
 
+class AnalyzerNotFoundError(Exception):
+    """Raised when the Content Understanding analyzer does not exist (404)."""
+
+
 def _load_schema(path: Path | None = None) -> dict[str, Any]:
     """Load the image analysis schema from JSON."""
     schema_file = path or _SCHEMA_PATH
@@ -43,7 +47,7 @@ class ContentUnderstandingService:
         self._endpoint = (endpoint or settings.azure_content_understanding_endpoint).rstrip("/")
         self._schema = _load_schema(schema_path)
         self._credential = credential or DefaultAzureCredential()
-        self._analyzer_name = "claimpilot-damage-analyzer"
+        self._analyzer_name = settings.azure_content_understanding_analyzer_id
 
     async def _get_token(self) -> str:
         """Acquire an access token for Cognitive Services."""
@@ -81,7 +85,15 @@ class ContentUnderstandingService:
                     "output_schema": self._schema,
                 },
             )
+        try:
             response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                raise AnalyzerNotFoundError(
+                    f"Analyzer '{self._analyzer_name}' not found. "
+                    "Create it in the Content Understanding resource first."
+                ) from exc
+            raise
 
         data = response.json()
         result_data = data.get("result", data)

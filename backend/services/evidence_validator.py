@@ -47,12 +47,6 @@ DEMO_POLICY_RECORDS: dict[str, dict[str, str]] = {
     },
 }
 
-# Known stub default values from ExtractorAgent._stub_extract()
-STUB_DEFAULTS = {
-    "policy_number": "AB12345678",
-    "applicant_name": "John Doe",
-}
-
 
 def _normalize(name: str) -> str:
     """Normalize a name for comparison: lowercase, collapse whitespace, strip."""
@@ -150,13 +144,10 @@ def validate_evidence(
         )
         escalation_reasons.append("Policy number format is invalid")
 
-    # 3. Check submitted vs extracted claimant name (skip if stub default)
+    # 3. Check submitted vs extracted claimant name
     extracted_name = extracted_fields.get("applicant_name")
     if extracted_name and claimant_name_submitted.strip():
-        if extracted_name == STUB_DEFAULTS["applicant_name"]:
-            # Stub extraction — skip comparison, don't flag
-            pass
-        elif not _names_match(claimant_name_submitted, extracted_name):
+        if not _names_match(claimant_name_submitted, extracted_name):
             errors.append(
                 f"Claimant name mismatch: submitted '{claimant_name_submitted}' "
                 f"vs extracted '{extracted_name}'"
@@ -169,13 +160,10 @@ def validate_evidence(
         # No extracted name to compare — can't validate
         pass
 
-    # 4. Check submitted vs extracted policy number (skip if stub default)
+    # 4. Check submitted vs extracted policy number
     extracted_policy = extracted_fields.get("policy_number")
     if extracted_policy and policy_number_submitted.strip():
-        if extracted_policy == STUB_DEFAULTS["policy_number"]:
-            # Stub extraction — skip comparison, don't flag
-            pass
-        elif policy_number_submitted.strip() != extracted_policy.strip():
+        if policy_number_submitted.strip() != extracted_policy.strip():
             errors.append(
                 f"Policy number mismatch: submitted '{policy_number_submitted}' "
                 f"vs extracted '{extracted_policy}'"

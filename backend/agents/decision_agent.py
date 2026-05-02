@@ -99,7 +99,7 @@ class DecisionAgent:
             AdjudicationDecision with decision, confidence, and reasoning chain.
         """
         if self._use_stubs:
-            return self._stub_decide(fraud_result, evidence_consistency)
+            return self._stub_decide(fraud_result, evidence_consistency, doc_extraction)
 
         context = {
             "classification": classification,
@@ -126,10 +126,10 @@ class DecisionAgent:
             )
         except AgentResponseError:
             logger.exception("DecisionAgent failed, falling back to stub")
-            return self._stub_decide(fraud_result, evidence_consistency)
+            return self._stub_decide(fraud_result, evidence_consistency, doc_extraction)
 
         # Enforce decision rules from domain config
-        result = _enforce_decision_rules(result, fraud_result, evidence_consistency)
+        result = _enforce_decision_rules(result, fraud_result, evidence_consistency, doc_extraction)
 
         return result
 
@@ -137,6 +137,7 @@ class DecisionAgent:
     def _stub_decide(
         fraud_result: dict[str, Any] | None = None,
         evidence_consistency: dict[str, Any] | None = None,
+        doc_extraction: dict[str, Any] | None = None,
     ) -> AdjudicationDecision:
         """Deterministic stub output for local dev."""
         decision = AdjudicationDecision(
@@ -164,13 +165,14 @@ class DecisionAgent:
                 ),
             ],
         )
-        return _enforce_decision_rules(decision, fraud_result, evidence_consistency)
+        return _enforce_decision_rules(decision, fraud_result, evidence_consistency, doc_extraction)
 
 
 def _enforce_decision_rules(
     decision: AdjudicationDecision,
     fraud_result: dict[str, Any] | None,
     evidence_consistency: dict[str, Any] | None = None,
+    doc_extraction: dict[str, Any] | None = None,
 ) -> AdjudicationDecision:
     """Enforce domain decision rules on agent output."""
     fraud_score = 0.0
@@ -179,6 +181,13 @@ def _enforce_decision_rules(
 
     # Override decision if agent didn't follow rules
     if decision.decision == "APPROVE":
+        # Block approval if document extraction failed
+        if doc_extraction and doc_extraction.get("status") == "failed":
+            decision.decision = "ESCALATE"
+            decision.escalation_reason = "Required document extraction failed"
+            decision.approved_amount = None
+            return decision
+
         if fraud_score >= FRAUD_SCORE_APPROVE_MAX:
             decision.decision = "ESCALATE"
             decision.escalation_reason = (

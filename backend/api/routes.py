@@ -101,7 +101,7 @@ async def submit_claim(
     # Start pipeline (direct invocation for local dev; Service Bus trigger in prod)
     orchestrator = _get_orchestrator(store)
     try:
-        orchestrator.run_pipeline(record)
+        await orchestrator.run_pipeline(record)
     except Exception:
         logger.exception("Pipeline execution failed for claim %s", claim_id)
 

@@ -1,5 +1,6 @@
 """Central configuration for ClaimPilot using pydantic-settings."""
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -21,6 +22,7 @@ class Settings(BaseSettings):
 
     # Azure Content Understanding (REST)
     azure_content_understanding_endpoint: str = ""
+    azure_content_understanding_analyzer_id: str = "claimpilot-damage-analyzer"
 
     # Azure Translator
     azure_translator_endpoint: str = "https://api.cognitive.microsofttranslator.com/"
@@ -56,7 +58,10 @@ class Settings(BaseSettings):
     decision_agent_id: str = ""
 
     # Stub mode — only for local dev, never silently in production
-    use_stub_agents: bool = False
+    use_stub_agents: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("use_stub_agents", "CLAIMPILOT_USE_STUBS"),
+    )
 
     # Azure Voice Live (Phase 4)
     voice_live_endpoint: str = ""

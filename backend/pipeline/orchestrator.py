@@ -18,6 +18,7 @@ import logging
 from datetime import datetime
 from typing import Any
 
+from backend.core.config import get_settings
 from backend.models.claim import (
     ClaimRecord,
     ClaimStatus,
@@ -49,6 +50,38 @@ class ClaimOrchestrator:
     ) -> None:
         self._store = state_store
         self._broadcaster = broadcaster
+        self._settings = get_settings()
+        self._use_stubs = self._settings.use_stub_agents
+
+        # Lazy-initialized service instances
+        self._doc_intel_service = None
+        self._content_understanding_service = None
+        self._speech_service = None
+        self._blob_service = None
+
+    def _get_doc_intel_service(self):
+        if self._doc_intel_service is None:
+            from backend.services.document_intelligence import DocumentIntelligenceService
+            self._doc_intel_service = DocumentIntelligenceService()
+        return self._doc_intel_service
+
+    def _get_content_understanding_service(self):
+        if self._content_understanding_service is None:
+            from backend.services.content_understanding import ContentUnderstandingService
+            self._content_understanding_service = ContentUnderstandingService()
+        return self._content_understanding_service
+
+    def _get_speech_service(self):
+        if self._speech_service is None:
+            from backend.services.speech import SpeechService
+            self._speech_service = SpeechService()
+        return self._speech_service
+
+    def _get_blob_service(self):
+        if self._blob_service is None:
+            from backend.services.blob_storage import BlobStorageService
+            self._blob_service = BlobStorageService()
+        return self._blob_service
 
     def _emit(
         self,
@@ -95,7 +128,7 @@ class ClaimOrchestrator:
         self._store.update_step(claim_id, step, StepStatus.FAILED, error=error)
         self._emit(claim_id, step, "stepFailed", {"error": error, "willRetry": False})
 
-    def run_pipeline(self, record: ClaimRecord) -> ClaimRecord:
+    async def run_pipeline(self, record: ClaimRecord) -> ClaimRecord:
         """Execute the full 8-step pipeline for a claim.
 
         Args:
@@ -115,9 +148,9 @@ class ClaimOrchestrator:
             # Steps 2-4: Fan-out ingestion (parallel conceptually,
             # executed sequentially here; Durable Functions fan_out/fan_in
             # handles true parallelism in production)
-            doc_output = self._step_ingest_document(claim_id, record.form_blob_url)
-            image_output = self._step_ingest_images(claim_id, record.image_blob_urls)
-            voice_output = self._step_ingest_voice(claim_id, record.audio_blob_url)
+            doc_output = await self._step_ingest_document(claim_id, record.form_blob_url)
+            image_output = await self._step_ingest_images(claim_id, record.image_blob_urls)
+            voice_output = await self._step_ingest_voice(claim_id, record.audio_blob_url)
 
             # Step 5: CLASSIFY
             classify_output = self._step_classify(
@@ -216,42 +249,87 @@ class ClaimOrchestrator:
 
     # --- Individual step implementations ---
 
-    def _step_ingest_document(
+    async def _step_ingest_document(
         self, claim_id: str, blob_url: str | None
     ) -> dict[str, Any]:
-        """Step 2: Document ingestion."""
+        """Step 2: Document ingestion via Azure Document Intelligence."""
         self._start_step(claim_id, PipelineStep.INGEST_DOCUMENT)
         try:
-            output: dict[str, Any] = {"status": "stub", "note": "Doc Intelligence not called"}
-            if blob_url:
-                output["blob_url"] = blob_url
+            if self._use_stubs:
+                output: dict[str, Any] = {"status": "stub", "note": "Doc Intelligence not called (stub mode)"}
+                if blob_url:
+                    output["blob_url"] = blob_url
+                self._complete_step(claim_id, PipelineStep.INGEST_DOCUMENT, output)
+                return output
+
+            if not blob_url:
+                output = {"status": "completed", "note": "No form document provided"}
+                self._complete_step(claim_id, PipelineStep.INGEST_DOCUMENT, output)
+                return output
+
+            service = self._get_doc_intel_service()
+            result = await service.extract_claim_form(blob_url)
+            output = result.model_dump()
+            output["status"] = "completed"
+            output["blob_url"] = blob_url
             self._complete_step(claim_id, PipelineStep.INGEST_DOCUMENT, output)
             return output
         except Exception as e:
             self._fail_step(claim_id, PipelineStep.INGEST_DOCUMENT, str(e))
             return {"status": "failed", "error": str(e)}
 
-    def _step_ingest_images(
+    async def _step_ingest_images(
         self, claim_id: str, image_urls: list[str]
     ) -> dict[str, Any]:
-        """Step 3: Image ingestion."""
+        """Step 3: Image ingestion via Azure Content Understanding."""
         self._start_step(claim_id, PipelineStep.INGEST_IMAGES)
         try:
-            output: dict[str, Any] = {
-                "status": "stub",
+            if self._use_stubs:
+                output: dict[str, Any] = {
+                    "status": "stub",
+                    "image_count": len(image_urls),
+                    "note": "Content Understanding not called (stub mode)",
+                }
+                self._complete_step(claim_id, PipelineStep.INGEST_IMAGES, output)
+                return output
+
+            if not image_urls:
+                output = {"status": "completed", "image_count": 0}
+                self._complete_step(claim_id, PipelineStep.INGEST_IMAGES, output)
+                return output
+
+            service = self._get_content_understanding_service()
+            all_damage_indicators: list[dict[str, Any]] = []
+            all_forensic_flags: list[str] = []
+            image_results: list[dict[str, Any]] = []
+
+            for url in image_urls:
+                img_result = await service.analyze_accident_image(url)
+                result_dict = img_result.model_dump()
+                image_results.append(result_dict)
+                all_damage_indicators.extend(
+                    d if isinstance(d, dict) else d
+                    for d in result_dict.get("damage_indicators", [])
+                )
+                all_forensic_flags.extend(result_dict.get("forensic_flags", []))
+
+            output = {
+                "status": "completed",
                 "image_count": len(image_urls),
-                "note": "Content Understanding not called",
+                "damage_indicators": all_damage_indicators,
+                "forensic_flags": all_forensic_flags,
+                "image_results": image_results,
             }
             self._complete_step(claim_id, PipelineStep.INGEST_IMAGES, output)
             return output
         except Exception as e:
             self._fail_step(claim_id, PipelineStep.INGEST_IMAGES, str(e))
-            return {"status": "failed", "error": str(e)}
+            return {"status": "failed", "image_count": len(image_urls), "error": str(e)}
 
-    def _step_ingest_voice(
+    async def _step_ingest_voice(
         self, claim_id: str, audio_url: str | None
     ) -> dict[str, Any]:
-        """Step 4: Voice transcription."""
+        """Step 4: Voice transcription via Azure Speech."""
         step = PipelineStep.INGEST_VOICE
         if not audio_url:
             self._store.update_step(claim_id, step, StepStatus.SKIPPED)
@@ -259,11 +337,31 @@ class ClaimOrchestrator:
             return {"status": "skipped", "note": "No audio provided"}
         self._start_step(claim_id, step)
         try:
-            output: dict[str, Any] = {
-                "status": "stub",
-                "audio_url": audio_url,
-                "note": "Speech STT not called",
-            }
+            if self._use_stubs:
+                output: dict[str, Any] = {
+                    "status": "stub",
+                    "audio_url": audio_url,
+                    "note": "Speech STT not called (stub mode)",
+                }
+                self._complete_step(claim_id, step, output)
+                return output
+
+            # Download blob to temp file — SpeechService requires local paths
+            blob_service = self._get_blob_service()
+            temp_path = blob_service.download_blob_to_temp(audio_url)
+            try:
+                service = self._get_speech_service()
+                result = await service.transcribe_voice_statement(temp_path)
+                output = result.model_dump()
+                output["status"] = "completed"
+                output["audio_url"] = audio_url
+            finally:
+                import os
+                try:
+                    os.unlink(temp_path)
+                except OSError:
+                    pass
+
             self._complete_step(claim_id, step, output)
             return output
         except Exception as e:

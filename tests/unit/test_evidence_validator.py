@@ -2,19 +2,16 @@
 
 from __future__ import annotations
 
-import pytest
-
-from backend.models.claim import ClaimRecord, ClaimStatus, AdjudicationDecision
+from backend.agents.decision_agent import _enforce_decision_rules
+from backend.models.claim import AdjudicationDecision, ClaimRecord
 from backend.services.evidence_validator import (
-    validate_evidence,
     _is_gibberish,
     _is_name_gibberish,
     _is_valid_policy_number,
     _names_match,
     lookup_policy,
+    validate_evidence,
 )
-from backend.agents.decision_agent import _enforce_decision_rules
-
 
 # --- Validator unit tests ---
 
@@ -182,6 +179,52 @@ class TestValidationDemoScenarios:
         assert len(result.validation_errors) >= 2  # both name and policy mismatch
 
 
+class TestValidationWithRealExtraction:
+    """Tests for behavior with real (non-stub) extracted fields."""
+
+    def test_real_extracted_name_mismatch_escalates(self) -> None:
+        """Real extraction that doesn't match submitted name → escalation."""
+        result = validate_evidence(
+            "James Chen",
+            "AT42093871",
+            {"applicant_name": "Maria Thompson"},
+        )
+        assert any("mismatch" in e.lower() for e in result.validation_errors)
+        assert result.name_match is False
+
+    def test_real_extracted_policy_mismatch_escalates(self) -> None:
+        """Real extraction that doesn't match submitted policy → escalation."""
+        result = validate_evidence(
+            "Maria Thompson",
+            "AT42093871",
+            {"policy_number": "JC77120456"},
+        )
+        assert any("Policy number mismatch" in e for e in result.validation_errors)
+        assert result.policy_match is False
+
+    def test_no_extracted_fields_skips_comparison(self) -> None:
+        """When extraction returns no fields (stub mode or empty), comparison is skipped."""
+        result = validate_evidence("Maria Thompson", "AT42093871", {})
+        assert result.validation_errors == []
+
+    def test_none_extracted_fields_skips_comparison(self) -> None:
+        """None extracted_fields → comparison is skipped."""
+        result = validate_evidence("Maria Thompson", "AT42093871", None)
+        assert result.validation_errors == []
+
+    def test_extracted_fields_match_no_errors(self) -> None:
+        """Extracted fields match submitted → no errors, matches confirmed."""
+        result = validate_evidence(
+            "Maria Thompson",
+            "AT42093871",
+            {"applicant_name": "Maria Thompson", "policy_number": "AT42093871"},
+        )
+        assert result.validation_errors == []
+        assert result.name_match is True
+        assert result.policy_match is True
+        assert result.form_matches_submission is True
+
+
 # --- Decision enforcement tests ---
 
 
@@ -250,6 +293,45 @@ class TestDecisionEnforcement:
             {"validation_errors": []},
         )
         assert result.decision == "ESCALATE"
+
+    def test_approval_blocked_by_failed_doc_extraction(self) -> None:
+        decision = AdjudicationDecision(
+            decision="APPROVE", confidence=0.9, approved_amount=7900
+        )
+        result = _enforce_decision_rules(
+            decision,
+            {"score": 0.1},
+            {"validation_errors": []},
+            doc_extraction={"status": "failed", "error": "Azure unavailable"},
+        )
+        assert result.decision == "ESCALATE"
+        assert "extraction failed" in result.escalation_reason.lower()
+        assert result.approved_amount is None
+
+    def test_approval_allowed_with_successful_doc_extraction(self) -> None:
+        decision = AdjudicationDecision(
+            decision="APPROVE", confidence=0.9, approved_amount=7900
+        )
+        result = _enforce_decision_rules(
+            decision,
+            {"score": 0.1},
+            {"validation_errors": []},
+            doc_extraction={"status": "completed"},
+        )
+        assert result.decision == "APPROVE"
+
+    def test_approval_allowed_with_no_doc_extraction(self) -> None:
+        """No doc_extraction passed — backward compat, should not block."""
+        decision = AdjudicationDecision(
+            decision="APPROVE", confidence=0.9, approved_amount=7900
+        )
+        result = _enforce_decision_rules(
+            decision,
+            {"score": 0.1},
+            {"validation_errors": []},
+            doc_extraction=None,
+        )
+        assert result.decision == "APPROVE"
 
 
 class TestClaimRecordPersistsSubmittedFields:
