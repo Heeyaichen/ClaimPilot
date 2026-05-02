@@ -57,6 +57,7 @@ class ClaimOrchestrator:
         # Lazy-initialized service instances
         self._doc_intel_service = None
         self._content_understanding_service = None
+        self._foundry_vision_service = None
         self._speech_service = None
         self._blob_service = None
 
@@ -71,6 +72,12 @@ class ClaimOrchestrator:
             from backend.services.content_understanding import ContentUnderstandingService
             self._content_understanding_service = ContentUnderstandingService()
         return self._content_understanding_service
+
+    def _get_foundry_vision_service(self):
+        if self._foundry_vision_service is None:
+            from backend.services.foundry_vision import FoundryVisionService
+            self._foundry_vision_service = FoundryVisionService()
+        return self._foundry_vision_service
 
     def _get_speech_service(self):
         if self._speech_service is None:
@@ -245,6 +252,23 @@ class ClaimOrchestrator:
             record = self._store.get_claim(claim_id) or record
             record.status = ClaimStatus.ESCALATED
             record.updated_at = datetime.utcnow()
+            # Ensure decision_result exists with escalation reason
+            if not record.decision_result:
+                record.decision_result = {
+                    "decision": "ESCALATE",
+                    "confidence": 0.0,
+                    "escalation_reason": str(e),
+                    "rejection_reason": None,
+                    "approved_amount": None,
+                    "reasoning_chain": [
+                        {
+                            "step": "Agent error",
+                            "conclusion": "Pipeline agent unavailable",
+                            "evidence_source": "system",
+                            "evidence_value": str(e),
+                        }
+                    ],
+                }
             self._store.mark_claim_status(claim_id, ClaimStatus.ESCALATED)
             self._emit(
                 claim_id, PipelineStep.DECIDE, "claimDecided",
@@ -252,10 +276,23 @@ class ClaimOrchestrator:
             )
         except Exception:
             logger.exception("Pipeline failed for claim %s", claim_id)
-            self._store.mark_claim_status(claim_id, ClaimStatus.FAILED)
-            self._emit(claim_id, PipelineStep.CLAIM_RECEIVED, "claimFailed")
             record = self._store.get_claim(claim_id) or record
-            record.status = ClaimStatus.FAILED
+            record.status = ClaimStatus.ESCALATED
+            record.updated_at = datetime.utcnow()
+            if not record.decision_result:
+                record.decision_result = {
+                    "decision": "ESCALATE",
+                    "confidence": 0.0,
+                    "escalation_reason": "Pipeline error — adjuster review required",
+                    "rejection_reason": None,
+                    "approved_amount": None,
+                    "reasoning_chain": [],
+                }
+            self._store.mark_claim_status(claim_id, ClaimStatus.ESCALATED)
+            self._emit(
+                claim_id, PipelineStep.DECIDE, "claimDecided",
+                {"outcome": "ESCALATED", "reason": "Pipeline error"},
+            )
 
         return record
 
@@ -293,14 +330,14 @@ class ClaimOrchestrator:
     async def _step_ingest_images(
         self, claim_id: str, image_urls: list[str]
     ) -> dict[str, Any]:
-        """Step 3: Image ingestion via Azure Content Understanding."""
+        """Step 3: Image ingestion via configured provider (CU or Foundry Vision)."""
         self._start_step(claim_id, PipelineStep.INGEST_IMAGES)
         try:
             if self._use_stubs:
                 output: dict[str, Any] = {
                     "status": "stub",
                     "image_count": len(image_urls),
-                    "note": "Content Understanding not called (stub mode)",
+                    "note": "Image analysis not called (stub mode)",
                 }
                 self._complete_step(claim_id, PipelineStep.INGEST_IMAGES, output)
                 return output
@@ -310,30 +347,104 @@ class ClaimOrchestrator:
                 self._complete_step(claim_id, PipelineStep.INGEST_IMAGES, output)
                 return output
 
-            service = self._get_content_understanding_service()
-            all_damage_indicators: list[dict[str, Any]] = []
-            all_forensic_flags: list[str] = []
-            image_results: list[dict[str, Any]] = []
+            provider = self._settings.image_analysis_provider
 
-            for url in image_urls:
-                img_result = await service.analyze_accident_image(url)
-                result_dict = img_result.model_dump()
-                image_results.append(result_dict)
-                all_damage_indicators.extend(
-                    d if isinstance(d, dict) else d
-                    for d in result_dict.get("damage_indicators", [])
-                )
-                all_forensic_flags.extend(result_dict.get("forensic_flags", []))
+            if provider == "disabled":
+                output = {
+                    "status": "completed",
+                    "image_count": len(image_urls),
+                    "note": "Image analysis disabled by configuration",
+                }
+                self._complete_step(claim_id, PipelineStep.INGEST_IMAGES, output)
+                return output
 
-            output = {
-                "status": "completed",
-                "image_count": len(image_urls),
-                "damage_indicators": all_damage_indicators,
-                "forensic_flags": all_forensic_flags,
-                "image_results": image_results,
-            }
-            self._complete_step(claim_id, PipelineStep.INGEST_IMAGES, output)
-            return output
+            # Try configured provider, fall back to vision if CU fails
+            service = None
+            actual_provider = provider
+            if provider == "foundry_vision":
+                service = self._get_foundry_vision_service()
+            else:
+                # Default: try CU first, fall back to Foundry Vision
+                try:
+                    service = self._get_content_understanding_service()
+                    actual_provider = "content_understanding"
+                except Exception:
+                    service = None
+
+                if service is None:
+                    service = self._get_foundry_vision_service()
+                    actual_provider = "foundry_vision"
+
+            # Try analysis with selected service
+            try:
+                all_damage_indicators: list[dict[str, Any]] = []
+                all_forensic_flags: list[str] = []
+                image_results: list[dict[str, Any]] = []
+
+                for url in image_urls:
+                    img_result = await service.analyze_accident_image(url)
+                    result_dict = img_result.model_dump()
+                    image_results.append(result_dict)
+                    all_damage_indicators.extend(
+                        d if isinstance(d, dict) else d
+                        for d in result_dict.get("damage_indicators", [])
+                    )
+                    all_forensic_flags.extend(result_dict.get("forensic_flags", []))
+
+                output = {
+                    "status": "completed",
+                    "image_count": len(image_urls),
+                    "provider": actual_provider,
+                    "damage_indicators": all_damage_indicators,
+                    "forensic_flags": all_forensic_flags,
+                    "image_results": image_results,
+                }
+                self._complete_step(claim_id, PipelineStep.INGEST_IMAGES, output)
+                return output
+            except Exception as e:
+                # CU failed — try Foundry Vision fallback
+                if actual_provider == "content_understanding":
+                    logger.warning(
+                        "CU image analysis failed (%s), trying Foundry Vision fallback",
+                        e,
+                    )
+                    try:
+                        service = self._get_foundry_vision_service()
+                        all_damage_indicators = []
+                        all_forensic_flags = []
+                        image_results = []
+
+                        for url in image_urls:
+                            img_result = await service.analyze_accident_image(url)
+                            result_dict = img_result.model_dump()
+                            image_results.append(result_dict)
+                            all_damage_indicators.extend(
+                                d if isinstance(d, dict) else d
+                                for d in result_dict.get("damage_indicators", [])
+                            )
+                            all_forensic_flags.extend(
+                                result_dict.get("forensic_flags", [])
+                            )
+
+                        output = {
+                            "status": "completed",
+                            "image_count": len(image_urls),
+                            "provider": "foundry_vision",
+                            "damage_indicators": all_damage_indicators,
+                            "forensic_flags": all_forensic_flags,
+                            "image_results": image_results,
+                        }
+                        self._complete_step(
+                            claim_id, PipelineStep.INGEST_IMAGES, output
+                        )
+                        return output
+                    except Exception as fallback_err:
+                        raise RuntimeError(
+                            f"Image analysis failed: CU error ({e}), "
+                            f"Vision fallback error ({fallback_err})"
+                        ) from fallback_err
+                raise
+
         except Exception as e:
             self._fail_step(claim_id, PipelineStep.INGEST_IMAGES, str(e))
             return {"status": "failed", "image_count": len(image_urls), "error": str(e)}

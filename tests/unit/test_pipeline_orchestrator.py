@@ -141,8 +141,8 @@ async def test_run_pipeline_failure_sets_failed_status():
 
     result = await orch.run_pipeline(record)
 
-    assert result.status == ClaimStatus.FAILED
-    store.mark_claim_status.assert_called_with("test-005", ClaimStatus.FAILED)
+    assert result.status == ClaimStatus.ESCALATED
+    store.mark_claim_status.assert_called_with("test-005", ClaimStatus.ESCALATED)
 
 
 @pytest.mark.asyncio

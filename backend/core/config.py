@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     azure_content_understanding_endpoint: str = ""
     azure_content_understanding_analyzer_id: str = "claimpilot-damage-analyzer"
 
+    # Image analysis provider: content_understanding | foundry_vision | disabled
+    image_analysis_provider: str = "content_understanding"
+
     # Azure Translator
     azure_translator_endpoint: str = "https://api.cognitive.microsofttranslator.com/"
     azure_translator_region: str = "eastus2"

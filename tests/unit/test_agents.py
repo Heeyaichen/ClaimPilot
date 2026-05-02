@@ -207,7 +207,7 @@ async def test_pipeline_failure_sets_failed():
         orch = ClaimOrchestrator(state_store=store, broadcaster=MagicMock())
     record = ClaimRecord(claim_id="test-p3-007", claimant_name="John Doe", policy_number="AB12345678")
     result = await orch.run_pipeline(record)
-    assert result.status == ClaimStatus.FAILED
+    assert result.status == ClaimStatus.ESCALATED
 
 
 # --- Rate-limit retry and live-mode agent error handling ---
@@ -384,3 +384,93 @@ async def test_pipeline_agent_error_sets_escalated():
         )
         result = await orch.run_pipeline(record)
         assert result.status == ClaimStatus.ESCALATED
+
+
+@pytest.mark.asyncio
+async def test_pipeline_agent_error_has_decision_result():
+    """Escalated claims must have decision_result with escalation reason."""
+    store = MagicMock()
+
+    def fake_update(claim_id, step, status, output=None, error=None):
+        record = ClaimRecord(
+            claim_id=claim_id,
+            steps=[PipelineStepState(step=s) for s in PipelineStep],
+        )
+        for s in record.steps:
+            if s.step == step:
+                s.status = status
+                if status == StepStatus.RUNNING:
+                    s.started_at = datetime.utcnow()
+                if status in (StepStatus.COMPLETED, StepStatus.FAILED, StepStatus.SKIPPED):
+                    s.completed_at = datetime.utcnow()
+        return record
+
+    store.update_step.side_effect = fake_update
+    store.get_claim.side_effect = lambda cid: ClaimRecord(
+        claim_id=cid, steps=[PipelineStepState(step=s) for s in PipelineStep]
+    )
+    store.mark_claim_status.return_value = None
+
+    from backend.pipeline.orchestrator import ClaimOrchestrator
+
+    with patch("backend.pipeline.orchestrator.get_settings") as mock_settings:
+        settings = MagicMock()
+        settings.use_stub_agents = False
+        mock_settings.return_value = settings
+        orch = ClaimOrchestrator(state_store=store, broadcaster=MagicMock())
+
+    with patch(
+        "backend.pipeline.orchestrator.run_classification",
+        side_effect=AgentResponseError("Agent unavailable due to rate limit"),
+    ):
+        record = ClaimRecord(claim_id="test-dec-001", claimant_name="Test")
+        result = await orch.run_pipeline(record)
+        assert result.status == ClaimStatus.ESCALATED
+        assert result.decision_result is not None
+        assert result.decision_result["decision"] == "ESCALATE"
+        assert "rate limit" in result.decision_result["escalation_reason"]
+
+
+@pytest.mark.asyncio
+async def test_pipeline_generic_error_has_decision_result():
+    """Generic pipeline errors also produce ESCALATE with decision_result."""
+    store = MagicMock()
+    call_count = 0
+
+    def failing_update(claim_id, step, status, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count > 2:
+            raise RuntimeError("Simulated failure")
+        record = ClaimRecord(
+            claim_id=claim_id,
+            steps=[PipelineStepState(step=s) for s in PipelineStep],
+        )
+        for s in record.steps:
+            if s.step == step:
+                s.status = status
+                if status == StepStatus.RUNNING:
+                    s.started_at = datetime.utcnow()
+                if status in (StepStatus.COMPLETED, StepStatus.FAILED):
+                    s.completed_at = datetime.utcnow()
+        return record
+
+    store.update_step.side_effect = failing_update
+    store.get_claim.side_effect = lambda cid: ClaimRecord(
+        claim_id=cid, steps=[PipelineStepState(step=s) for s in PipelineStep]
+    )
+    store.mark_claim_status.return_value = None
+
+    from backend.pipeline.orchestrator import ClaimOrchestrator
+
+    with patch("backend.pipeline.orchestrator.get_settings") as mock_settings:
+        settings = MagicMock()
+        settings.use_stub_agents = True
+        mock_settings.return_value = settings
+        orch = ClaimOrchestrator(state_store=store, broadcaster=MagicMock())
+
+    record = ClaimRecord(claim_id="test-dec-002", claimant_name="Test")
+    result = await orch.run_pipeline(record)
+    assert result.status == ClaimStatus.ESCALATED
+    assert result.decision_result is not None
+    assert result.decision_result["decision"] == "ESCALATE"
