@@ -99,7 +99,7 @@ async def test_extract_claim_form_success(mock_settings: None) -> None:
 
 @pytest.mark.asyncio
 async def test_extract_claim_form_empty_document(mock_settings: None) -> None:
-    mock_result = _make_mock_result(documents=[])
+    mock_result = _make_mock_result(documents=[], content="")
     mock_poller = MagicMock()
     mock_poller.result.return_value = mock_result
 
@@ -113,8 +113,32 @@ async def test_extract_claim_form_empty_document(mock_settings: None) -> None:
             credential=MagicMock(),
         )
 
+        # Empty content + no documents → raises EmptyDocumentError
         with pytest.raises(EmptyDocumentError, match="No documents found"):
             await service.extract_claim_form("https://blob.example.com/empty.pdf")
+
+
+@pytest.mark.asyncio
+async def test_extract_claim_form_content_only_no_documents(mock_settings: None) -> None:
+    """prebuilt-layout returns content but no structured documents — should return content."""
+    mock_result = _make_mock_result(documents=[], content="Extracted text content here")
+    mock_poller = MagicMock()
+    mock_poller.result.return_value = mock_result
+
+    with patch("backend.services.document_intelligence.DocumentIntelligenceClient") as mock_client_cls:
+        mock_client_instance = mock_client_cls.return_value
+        mock_client_instance.begin_analyze_document.return_value = mock_poller
+
+        service = DocumentIntelligenceService(
+            endpoint="https://di.example.com/",
+            model_id="prebuilt-layout",
+            credential=MagicMock(),
+        )
+
+        result = await service.extract_claim_form("https://blob.example.com/doc.pdf")
+        assert result.markdown_content == "Extracted text content here"
+        assert result.fields == {}
+        assert result.model_id == "prebuilt-layout"
 
 
 @pytest.mark.asyncio

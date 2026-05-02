@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from typing import Any, TypeVar
 
 from pydantic import BaseModel, ValidationError
@@ -25,6 +26,10 @@ T = TypeVar("T", bound=BaseModel)
 
 # Maximum retries when agent returns malformed JSON
 MAX_PARSE_RETRIES = 1
+
+# Retry settings for rate-limit (429) errors
+MAX_RATE_LIMIT_RETRIES = 3
+RATE_LIMIT_BASE_DELAY = 5.0  # seconds, doubles each retry
 
 
 class AgentResponseError(Exception):
@@ -116,11 +121,13 @@ class FoundryAgentClient:
         """Execute the agent run via Azure OpenAI Assistants API.
 
         Uses the OpenAI SDK against the Azure Cognitive Services endpoint,
-        which works with pre-created assistants (agents). Falls back to
-        azure-ai-projects SDK if available and needed.
+        which works with pre-created assistants (agents).
+
+        Retries on rate-limit (429) errors with exponential backoff up to
+        MAX_RATE_LIMIT_RETRIES times before raising AgentResponseError.
         """
         try:
-            from openai import APIConnectionError, APIError, AzureOpenAI  # noqa: F401
+            from openai import APIConnectionError, APIError, RateLimitError
         except ImportError as e:
             raise AgentResponseError(
                 "openai is required for agent calls. "
@@ -144,28 +151,49 @@ class FoundryAgentClient:
                 )
                 agent_id = ephemeral_agent.id
 
-            thread = client.beta.threads.create()
-            client.beta.threads.messages.create(
-                thread_id=thread.id,
-                role="user",
-                content=user_message,
-            )
-            run = client.beta.threads.runs.create_and_poll(
-                thread_id=thread.id,
-                assistant_id=agent_id,
-            )
+            # Retry loop for rate-limit errors
+            last_error: Exception | None = None
+            for attempt in range(MAX_RATE_LIMIT_RETRIES + 1):
+                try:
+                    thread = client.beta.threads.create()
+                    client.beta.threads.messages.create(
+                        thread_id=thread.id,
+                        role="user",
+                        content=user_message,
+                    )
+                    run = client.beta.threads.runs.create_and_poll(
+                        thread_id=thread.id,
+                        assistant_id=agent_id,
+                    )
 
-            if run.status == "failed":
-                raise AgentResponseError(f"Agent run failed: {run.last_error}")
+                    if run.status == "failed":
+                        raise AgentResponseError(f"Agent run failed: {run.last_error}")
 
-            messages = client.beta.threads.messages.list(thread_id=thread.id)
-            for msg in messages.data:
-                if msg.role == "assistant":
-                    return msg.content[0].text.value if msg.content else ""
+                    messages = client.beta.threads.messages.list(thread_id=thread.id)
+                    for msg in messages.data:
+                        if msg.role == "assistant":
+                            return msg.content[0].text.value if msg.content else ""
 
-            raise AgentResponseError("No assistant response found in thread")
-        except (APIConnectionError, APIError) as e:
-            raise AgentResponseError(f"Azure OpenAI API error: {e}") from e
+                    raise AgentResponseError("No assistant response found in thread")
+                except RateLimitError as e:
+                    last_error = e
+                    if attempt < MAX_RATE_LIMIT_RETRIES:
+                        delay = RATE_LIMIT_BASE_DELAY * (2 ** attempt)
+                        logger.warning(
+                            "Rate limited (attempt %d/%d), retrying in %.1fs",
+                            attempt + 1, MAX_RATE_LIMIT_RETRIES + 1, delay,
+                        )
+                        time.sleep(delay)
+                    else:
+                        raise AgentResponseError(
+                            f"Agent unavailable due to rate limit after "
+                            f"{MAX_RATE_LIMIT_RETRIES + 1} attempts: {e}"
+                        ) from e
+                except (APIConnectionError, APIError) as e:
+                    raise AgentResponseError(f"Azure OpenAI API error: {e}") from e
+
+            # Should not reach here, but just in case
+            raise AgentResponseError(f"Agent call failed: {last_error}")
         finally:
             if ephemeral_agent:
                 try:

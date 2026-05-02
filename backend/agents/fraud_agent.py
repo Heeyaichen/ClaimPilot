@@ -130,6 +130,8 @@ class FraudDetectionAgent:
                 context=context,
             )
         except AgentResponseError:
+            if not self._use_stubs:
+                raise
             logger.exception("FraudDetectionAgent failed, falling back to stub")
             return self._stub_assess()
 

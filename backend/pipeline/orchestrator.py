@@ -18,6 +18,7 @@ import logging
 from datetime import datetime
 from typing import Any
 
+from backend.agents.base import AgentResponseError
 from backend.core.config import get_settings
 from backend.models.claim import (
     ClaimRecord,
@@ -238,6 +239,17 @@ class ClaimOrchestrator:
             )
             logger.info("Pipeline completed for claim %s → %s", claim_id, record.status.value)
 
+        except AgentResponseError as e:
+            # Agent failures (rate limit, API error) → ESCALATE, not FAIL
+            logger.exception("Agent error for claim %s: %s", claim_id, e)
+            record = self._store.get_claim(claim_id) or record
+            record.status = ClaimStatus.ESCALATED
+            record.updated_at = datetime.utcnow()
+            self._store.mark_claim_status(claim_id, ClaimStatus.ESCALATED)
+            self._emit(
+                claim_id, PipelineStep.DECIDE, "claimDecided",
+                {"outcome": "ESCALATED", "reason": str(e)},
+            )
         except Exception:
             logger.exception("Pipeline failed for claim %s", claim_id)
             self._store.mark_claim_status(claim_id, ClaimStatus.FAILED)

@@ -125,6 +125,8 @@ class DecisionAgent:
                 context=context,
             )
         except AgentResponseError:
+            if not self._use_stubs:
+                raise
             logger.exception("DecisionAgent failed, falling back to stub")
             return self._stub_decide(fraud_result, evidence_consistency, doc_extraction)
 
