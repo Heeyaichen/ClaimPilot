@@ -17,10 +17,17 @@ CRITICAL REQUIREMENT: Every conclusion in your reasoning_chain MUST be
 linked to a specific evidence_source. Do not make inferences not supported
 by the provided evidence. If evidence is insufficient, set decision to ESCALATE.
 
+EVIDENCE CONSISTENCY: You will receive an evidence_consistency object.
+If evidence_consistency.validation_errors is non-empty, you MUST NOT approve.
+If evidence_consistency.policy_lookup_status is "not_found", you MUST NOT approve.
+If evidence_consistency.name_match is false or policy_match is false, you MUST NOT approve.
+These are hard rules enforced both here and in post-processing.
+
 Decision rules:
-- APPROVE: fraud_score < 0.4 AND confidence >= 0.80 AND all required fields validated
+- APPROVE: fraud_score < 0.4 AND confidence >= 0.80 AND all required fields
+  validated AND evidence_consistency has no errors
 - REJECT: Clear policy exclusion OR fraud_score >= 0.7 AND evidence is definitive
-- ESCALATE: Any other case, OR if reasoning chain cannot be fully grounded
+- ESCALATE: Any other case, OR if reasoning chain cannot be fully grounded, OR evidence validation failed
 
 approved_amount: If APPROVE, calculate based on:
   - Document-extracted repair estimate
@@ -75,6 +82,7 @@ class DecisionAgent:
         doc_extraction: dict[str, Any] | None = None,
         image_analysis: dict[str, Any] | None = None,
         voice_transcript: dict[str, Any] | None = None,
+        evidence_consistency: dict[str, Any] | None = None,
     ) -> AdjudicationDecision:
         """Produce final adjudication decision.
 
@@ -85,12 +93,13 @@ class DecisionAgent:
             doc_extraction: Document ingestion output.
             image_analysis: Image ingestion output.
             voice_transcript: Voice ingestion output.
+            evidence_consistency: Cross-validation result for submitted evidence.
 
         Returns:
             AdjudicationDecision with decision, confidence, and reasoning chain.
         """
         if self._use_stubs:
-            return self._stub_decide(fraud_result)
+            return self._stub_decide(fraud_result, evidence_consistency, doc_extraction)
 
         context = {
             "classification": classification,
@@ -99,6 +108,7 @@ class DecisionAgent:
             "doc_extraction": doc_extraction,
             "image_analysis": image_analysis,
             "voice_transcript": voice_transcript,
+            "evidence_consistency": evidence_consistency,
         }
 
         prompt = (
@@ -115,20 +125,24 @@ class DecisionAgent:
                 context=context,
             )
         except AgentResponseError:
+            if not self._use_stubs:
+                raise
             logger.exception("DecisionAgent failed, falling back to stub")
-            return self._stub_decide(fraud_result)
+            return self._stub_decide(fraud_result, evidence_consistency, doc_extraction)
 
         # Enforce decision rules from domain config
-        result = _enforce_decision_rules(result, fraud_result)
+        result = _enforce_decision_rules(result, fraud_result, evidence_consistency, doc_extraction)
 
         return result
 
     @staticmethod
     def _stub_decide(
         fraud_result: dict[str, Any] | None = None,
+        evidence_consistency: dict[str, Any] | None = None,
+        doc_extraction: dict[str, Any] | None = None,
     ) -> AdjudicationDecision:
         """Deterministic stub output for local dev."""
-        return AdjudicationDecision(
+        decision = AdjudicationDecision(
             decision="APPROVE",
             confidence=0.88,
             approved_amount=7900.00,
@@ -153,11 +167,14 @@ class DecisionAgent:
                 ),
             ],
         )
+        return _enforce_decision_rules(decision, fraud_result, evidence_consistency, doc_extraction)
 
 
 def _enforce_decision_rules(
     decision: AdjudicationDecision,
     fraud_result: dict[str, Any] | None,
+    evidence_consistency: dict[str, Any] | None = None,
+    doc_extraction: dict[str, Any] | None = None,
 ) -> AdjudicationDecision:
     """Enforce domain decision rules on agent output."""
     fraud_score = 0.0
@@ -166,6 +183,13 @@ def _enforce_decision_rules(
 
     # Override decision if agent didn't follow rules
     if decision.decision == "APPROVE":
+        # Block approval if document extraction failed
+        if doc_extraction and doc_extraction.get("status") == "failed":
+            decision.decision = "ESCALATE"
+            decision.escalation_reason = "Required document extraction failed"
+            decision.approved_amount = None
+            return decision
+
         if fraud_score >= FRAUD_SCORE_APPROVE_MAX:
             decision.decision = "ESCALATE"
             decision.escalation_reason = (
@@ -178,6 +202,15 @@ def _enforce_decision_rules(
             decision.escalation_reason = (
                 f"Decision confidence {decision.confidence:.2f} below "
                 f"threshold {DECISION_CONFIDENCE_THRESHOLD}"
+            )
+            decision.approved_amount = None
+
+        # Block approval on evidence validation failures
+        if evidence_consistency and evidence_consistency.get("validation_errors"):
+            errors = evidence_consistency["validation_errors"]
+            decision.decision = "ESCALATE"
+            decision.escalation_reason = (
+                f"Evidence validation failed: {'; '.join(errors)}"
             )
             decision.approved_amount = None
 

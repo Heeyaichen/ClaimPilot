@@ -1,5 +1,6 @@
 """Central configuration for ClaimPilot using pydantic-settings."""
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -21,6 +22,10 @@ class Settings(BaseSettings):
 
     # Azure Content Understanding (REST)
     azure_content_understanding_endpoint: str = ""
+    azure_content_understanding_analyzer_id: str = "claimpilot-damage-analyzer"
+
+    # Image analysis provider: content_understanding | foundry_vision | disabled
+    image_analysis_provider: str = "content_understanding"
 
     # Azure Translator
     azure_translator_endpoint: str = "https://api.cognitive.microsofttranslator.com/"
@@ -56,13 +61,18 @@ class Settings(BaseSettings):
     decision_agent_id: str = ""
 
     # Stub mode — only for local dev, never silently in production
-    use_stub_agents: bool = False
+    use_stub_agents: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("use_stub_agents", "CLAIMPILOT_USE_STUBS"),
+    )
 
     # Azure Voice Live (Phase 4)
     voice_live_endpoint: str = ""
-    voice_live_api_version: str = "2026-01-01-preview"
-    voice_live_model: str = "en-US-AvaMultilingualNeural"
-    voice_live_voice: str = "en-US-AvaMultilingualNeural"
+    voice_live_api_version: str = "2025-10-01"
+    voice_live_model: str = "gpt-realtime"
+    voice_live_voice: str = "alloy"
+    voice_live_transcription_model: str = "gpt-4o-mini-transcribe"
+    voice_live_transcription_language: str = "en-US"
     voice_live_enable_mcp: bool = False
     voice_live_mcp_server_url: str = ""
     adjuster_session_token_secret: str = "dev-secret-change-in-prod"

@@ -1,6 +1,6 @@
 targetScope = 'subscription'
 
-param location string = 'eastus2'
+param location string = 'swedencentral'
 param projectName string = 'claimpilot'
 param environment string = 'dev'
 param resourceGroupName string = '${projectName}-${environment}-rg'
@@ -9,6 +9,16 @@ param tags object = {
   environment: environment
   managedBy: 'bicep'
 }
+
+// Compute hosting: 'functions' (intended) or 'containerapps' (live-validation fallback)
+@allowed(['functions', 'containerapps'])
+param backendHostKind string = 'functions'
+
+// Image tag for Container Apps mode
+param imageTag string = 'v1.0.0'
+
+// Create Foundry project via ARM (set false when projects API has platform issues)
+param createProject bool = true
 
 // ---------------------------------------------------------------
 // Resource Group
@@ -20,7 +30,7 @@ resource rg 'Microsoft.Resources/resourceGroups@2024-03-01' = {
 }
 
 // ---------------------------------------------------------------
-// Module deployments (all scoped into the resource group)
+// Data & AI Services (deployed regardless of host kind)
 // ---------------------------------------------------------------
 
 module storage './modules/storage.bicep' = {
@@ -133,7 +143,24 @@ module search './modules/search.bicep' = {
   }
 }
 
-module functions './modules/functions.bicep' = {
+module foundry './modules/foundry.bicep' = {
+  name: 'foundry-deploy'
+  scope: rg
+  params: {
+    location: location
+    projectName: projectName
+    environment: environment
+    tags: tags
+    modelDeploymentName: 'gpt-5-4'
+    createProject: createProject
+  }
+}
+
+// ---------------------------------------------------------------
+// Compute: Functions (intended architecture)
+// ---------------------------------------------------------------
+
+module functions './modules/functions.bicep' = if (backendHostKind == 'functions') {
   name: 'functions-deploy'
   scope: rg
   params: {
@@ -146,8 +173,12 @@ module functions './modules/functions.bicep' = {
   }
 }
 
-module foundry './modules/foundry.bicep' = {
-  name: 'foundry-deploy'
+// ---------------------------------------------------------------
+// Compute: Container Apps (live-validation alternative)
+// ---------------------------------------------------------------
+
+module containerRegistry './modules/container-registry.bicep' = if (backendHostKind == 'containerapps') {
+  name: 'container-registry-deploy'
   scope: rg
   params: {
     location: location
@@ -157,11 +188,96 @@ module foundry './modules/foundry.bicep' = {
   }
 }
 
+module containerAppsEnv './modules/container-apps-environment.bicep' = if (backendHostKind == 'containerapps') {
+  name: 'container-apps-env-deploy'
+  scope: rg
+  params: {
+    location: location
+    projectName: projectName
+    environment: environment
+    tags: tags
+  }
+}
+
+module apiApp './modules/container-app-api.bicep' = if (backendHostKind == 'containerapps') {
+  name: 'container-app-api-deploy'
+  scope: rg
+  params: {
+    location: location
+    projectName: projectName
+    environment: environment
+    tags: tags
+    environmentId: containerAppsEnv.outputs.environmentId
+    acrLoginServer: containerRegistry.outputs.acrLoginServer
+    acrName: containerRegistry.outputs.acrName
+    imageName: 'claimpilot-backend:${imageTag}'
+    storageEndpoint: storage.outputs.storageEndpoint
+    cosmosEndpoint: cosmos.outputs.cosmosEndpoint
+    cosmosDatabaseName: cosmos.outputs.databaseName
+    serviceBusNamespaceName: servicebus.outputs.serviceBusNamespaceName
+    claimsIngestionQueueName: servicebus.outputs.claimsIngestionQueueName
+    signalREndpoint: signalr.outputs.signalREndpoint
+    searchEndpoint: search.outputs.searchServiceEndpoint
+    keyVaultEndpoint: keyvault.outputs.keyVaultEndpoint
+    docIntelligenceEndpoint: docIntelligence.outputs.docIntelligenceEndpoint
+    speechEndpoint: speech.outputs.speechServiceEndpoint
+    translatorEndpoint: translator.outputs.translatorEndpoint
+    contentUnderstandingEndpoint: contentUnderstanding.outputs.contentUnderstandingEndpoint
+    foundryProjectEndpoint: foundry.outputs.foundryProjectEndpoint
+    modelDeploymentName: foundry.outputs.modelDeploymentName
+    claimpilotUseStubs: true
+  }
+}
+
+module workerApp './modules/container-app-worker.bicep' = if (backendHostKind == 'containerapps') {
+  name: 'container-app-worker-deploy'
+  scope: rg
+  params: {
+    location: location
+    projectName: projectName
+    environment: environment
+    tags: tags
+    environmentId: containerAppsEnv.outputs.environmentId
+    acrLoginServer: containerRegistry.outputs.acrLoginServer
+    imageName: 'claimpilot-backend:${imageTag}'
+    storageEndpoint: storage.outputs.storageEndpoint
+    cosmosEndpoint: cosmos.outputs.cosmosEndpoint
+    cosmosDatabaseName: cosmos.outputs.databaseName
+    serviceBusNamespaceName: servicebus.outputs.serviceBusNamespaceName
+    claimsIngestionQueueName: servicebus.outputs.claimsIngestionQueueName
+    signalREndpoint: signalr.outputs.signalREndpoint
+    searchEndpoint: search.outputs.searchServiceEndpoint
+    keyVaultEndpoint: keyvault.outputs.keyVaultEndpoint
+    docIntelligenceEndpoint: docIntelligence.outputs.docIntelligenceEndpoint
+    speechEndpoint: speech.outputs.speechServiceEndpoint
+    translatorEndpoint: translator.outputs.translatorEndpoint
+    contentUnderstandingEndpoint: contentUnderstanding.outputs.contentUnderstandingEndpoint
+    foundryProjectEndpoint: foundry.outputs.foundryProjectEndpoint
+    modelDeploymentName: foundry.outputs.modelDeploymentName
+    claimpilotUseStubs: true
+  }
+}
+
+module frontendApp './modules/container-app-frontend.bicep' = if (backendHostKind == 'containerapps') {
+  name: 'container-app-frontend-deploy'
+  scope: rg
+  params: {
+    location: location
+    projectName: projectName
+    environment: environment
+    tags: tags
+    environmentId: containerAppsEnv.outputs.environmentId
+    acrLoginServer: containerRegistry.outputs.acrLoginServer
+    imageName: 'claimpilot-frontend:${imageTag}'
+    apiBaseUrl: 'https://${apiApp.outputs.apiFqdn}'
+  }
+}
+
 // ---------------------------------------------------------------
-// RBAC Role Assignments — delegated to RG-scoped module
+// RBAC — targets Function identity or Container App identities
 // ---------------------------------------------------------------
 
-module rbac './modules/rbac.bicep' = {
+module rbac './modules/rbac.bicep' = if (backendHostKind == 'functions') {
   name: 'rbac-deploy'
   scope: rg
   params: {
@@ -182,12 +298,35 @@ module rbac './modules/rbac.bicep' = {
   }
 }
 
+// RBAC for Container Apps — assigns roles to API and worker identities
+module rbacContainerApps './modules/rbac-containerapps.bicep' = if (backendHostKind == 'containerapps') {
+  name: 'rbac-containerapps-deploy'
+  scope: rg
+  params: {
+    apiPrincipalId: apiApp!.outputs.apiAppPrincipalId
+    workerPrincipalId: workerApp!.outputs.workerAppPrincipalId
+    projectName: projectName
+    environment: environment
+    storageAccountId: storage.outputs.storageAccountId
+    cosmosAccountId: cosmos.outputs.cosmosAccountId
+    serviceBusNamespaceId: servicebus.outputs.serviceBusNamespaceId
+    searchServiceId: search.outputs.searchServiceId
+    docIntelligenceId: docIntelligence.outputs.docIntelligenceId
+    speechServiceId: speech.outputs.speechServiceId
+    translatorId: translator.outputs.translatorId
+    contentUnderstandingId: contentUnderstanding.outputs.contentUnderstandingId
+    foundryId: foundry.outputs.foundryResourceId
+  }
+}
+
 // ---------------------------------------------------------------
-// Outputs — all endpoint URLs and resource names
+// Outputs
 // ---------------------------------------------------------------
 
 output resourceGroupName string = rg.name
+output backendHostKind string = backendHostKind
 
+// Data services
 output storageAccountName string = storage.outputs.storageAccountName
 output storageEndpoint string = storage.outputs.storageEndpoint
 
@@ -219,8 +358,18 @@ output signalREndpoint string = signalr.outputs.signalREndpoint
 output searchServiceName string = search.outputs.searchServiceName
 output searchServiceEndpoint string = search.outputs.searchServiceEndpoint
 
-output functionAppName string = functions.outputs.functionAppName
-output functionAppPrincipalId string = functions.outputs.functionAppPrincipalId
-output functionAppDefaultHostname string = functions.outputs.functionAppDefaultHostname
+// Foundry
+output foundryResourceName string = foundry.outputs.foundryResourceName
+output foundryProjectName string = foundry.outputs.foundryProjectName
+output foundryProjectEndpoint string = foundry.outputs.foundryProjectEndpoint
+output modelDeploymentName string = foundry.outputs.modelDeploymentName
 
-output foundryWorkspaceName string = foundry.outputs.foundryWorkspaceName
+// Functions outputs (only when backendHostKind == 'functions')
+output functionAppName string = backendHostKind == 'functions' ? functions.outputs.functionAppName : ''
+output functionAppPrincipalId string = backendHostKind == 'functions' ? functions.outputs.functionAppPrincipalId : ''
+
+// Container Apps outputs (only when backendHostKind == 'containerapps')
+output apiFqdn string = backendHostKind == 'containerapps' ? apiApp!.outputs.apiFqdn : ''
+output workerAppName string = backendHostKind == 'containerapps' ? workerApp!.outputs.workerAppName : ''
+output frontendFqdn string = backendHostKind == 'containerapps' ? frontendApp!.outputs.frontendFqdn : ''
+output acrLoginServer string = backendHostKind == 'containerapps' ? containerRegistry!.outputs.acrLoginServer : ''

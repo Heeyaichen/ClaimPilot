@@ -15,6 +15,7 @@ def run_decision(
     doc_extraction: dict[str, Any] | None = None,
     image_analysis: dict[str, Any] | None = None,
     voice_transcript: dict[str, Any] | None = None,
+    evidence_consistency: dict[str, Any] | None = None,
 ) -> AdjudicationDecision:
     """Run final adjudication via DecisionAgent."""
     agent = DecisionAgent()
@@ -25,4 +26,5 @@ def run_decision(
         doc_extraction=doc_extraction,
         image_analysis=image_analysis,
         voice_transcript=voice_transcript,
+        evidence_consistency=evidence_consistency,
     )

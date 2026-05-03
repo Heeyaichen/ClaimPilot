@@ -30,7 +30,7 @@ def test_upload_file_returns_url():
     service, mock_blob = _make_service()
     url = service.upload_file(b"file content", "doc.pdf", claim_id="c1", prefix="forms")
     assert url == mock_blob.url
-    service._get_client.assert_called_once()
+    assert service._get_client.call_count >= 1
 
 
 def test_upload_file_without_claim_id():

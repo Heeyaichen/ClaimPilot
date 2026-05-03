@@ -1,0 +1,16 @@
+{
+  "claimant_name": "James Chen",
+  "policy_number": "JC77120456",
+  "claim_id": "claim_002_escalate",
+  "scenario": "Rear-end collision with high repair estimate \u2014 escalate for review",
+  "expected_outcome": "ESCALATED",
+  "files": {
+    "claim_form": "claim_form.pdf",
+    "photos": [
+      "photo_1.jpg",
+      "photo_2.jpg"
+    ],
+    "voice_transcript": "voice_statement.txt",
+    "audio": "optional \u2014 not included in this pack"
+  }
+}

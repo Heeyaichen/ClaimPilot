@@ -3,18 +3,37 @@
 import { useEffect, useState } from "react";
 import { getAdjusterQueue, type QueueClaim } from "@/lib/api";
 
-function FraudBadge({ score }: { score: number | undefined }) {
-  if (score == null) return <span className="text-xs text-gray-400">N/A</span>;
+function FraudBadge({ score, status }: { score: number | undefined; status: string }) {
+  if (status === "ESCALATED" || status === "APPROVED" || status === "REJECTED") {
+    if (score == null) return <span className="text-xs text-gray-500 italic">Not run</span>;
+  }
+  if (score == null) return <span className="text-xs text-gray-400">—</span>;
   const color =
     score >= 0.7 ? "bg-red-100 text-red-700" : score >= 0.4 ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700";
   return <span className={`text-xs px-2 py-0.5 rounded font-medium ${color}`}>{score.toFixed(2)}</span>;
 }
 
-function DecisionBadge({ decision }: { decision: string | null }) {
-  if (!decision) return <span className="text-xs text-gray-400">Pending</span>;
+function DecisionBadge({ decision, status }: { decision: string | null; status: string }) {
+  if (!decision) {
+    if (status === "ESCALATED") return <span className="text-xs font-medium text-amber-700">ESCALATED</span>;
+    return <span className="text-xs text-gray-400">Processing</span>;
+  }
   const color =
     decision === "APPROVE" ? "text-emerald-700" : decision === "REJECT" ? "text-red-700" : "text-amber-700";
   return <span className={`text-xs font-medium ${color}`}>{decision}</span>;
+}
+
+function EscalationReason({ reason }: { reason: string | null | undefined }) {
+  if (!reason) return <span className="text-xs text-gray-400">—</span>;
+  // Shorten common patterns
+  const short = reason
+    .replace(/^Agent unavailable due to rate limit.*$/, "Agent rate limited")
+    .replace(/^Evidence validation failed: /, "")
+    .replace(/Analyzer.*not found.*$/, "Image analysis unavailable")
+    .replace(/Image analysis failed.*$/, "Image analysis unavailable")
+    .replace(/^Required document extraction failed.*$/, "Document extraction failed")
+    .replace(/Pipeline error.*$/, "Pipeline error");
+  return <span className="text-xs text-gray-600" title={reason}>{short}</span>;
 }
 
 export default function AdjusterQueuePage() {
@@ -64,6 +83,7 @@ export default function AdjusterQueuePage() {
                   <th className="text-left px-4 py-3 text-gray-600 font-medium">Claimant</th>
                   <th className="text-left px-4 py-3 text-gray-600 font-medium">Fraud</th>
                   <th className="text-left px-4 py-3 text-gray-600 font-medium">Decision</th>
+                  <th className="text-left px-4 py-3 text-gray-600 font-medium">Reason</th>
                   <th className="text-left px-4 py-3 text-gray-600 font-medium">Updated</th>
                   <th className="text-right px-4 py-3 text-gray-600 font-medium">Actions</th>
                 </tr>
@@ -76,10 +96,13 @@ export default function AdjusterQueuePage() {
                     </td>
                     <td className="px-4 py-3 text-gray-700">{claim.claimant_name || "—"}</td>
                     <td className="px-4 py-3">
-                      <FraudBadge score={claim.fraud_result?.score} />
+                      <FraudBadge score={claim.fraud_result?.score} status={claim.status} />
                     </td>
                     <td className="px-4 py-3">
-                      <DecisionBadge decision={claim.decision_result?.decision ?? null} />
+                      <DecisionBadge decision={claim.decision_result?.decision ?? null} status={claim.status} />
+                    </td>
+                    <td className="px-4 py-3">
+                      <EscalationReason reason={claim.decision_result?.escalation_reason} />
                     </td>
                     <td className="px-4 py-3 text-xs text-gray-500">
                       {claim.updated_at ? new Date(claim.updated_at).toLocaleDateString() : "—"}

@@ -117,6 +117,8 @@ class ExtractorAgent:
                 context=context,
             )
         except AgentResponseError:
+            if not self._use_stubs:
+                raise
             logger.exception("ExtractorAgent failed, falling back to stub")
             return self._stub_extract()
 

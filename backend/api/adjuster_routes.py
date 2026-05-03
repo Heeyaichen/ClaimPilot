@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any
 
+import websockets
 from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
 
+from backend.core.config import get_settings
 from backend.models.claim import ClaimRecord
 from backend.models.voice_live import AdjusterSessionResponse, ClaimLookupResult
 from backend.services.claim_lookup_tool import ClaimLookupTool
 from backend.services.claim_state_store import ClaimStateStore
-from backend.services.voice_live import VoiceLiveService
+from backend.services.voice_live import VoiceLiveBridge, VoiceLiveService
 
 logger = logging.getLogger(__name__)
 
@@ -37,21 +40,10 @@ async def get_adjuster_queue(
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(20, ge=1, le=100, description="Items per page"),
 ) -> Any:
-    """Get claims queue for adjuster review, sorted by priority.
-
-    Priority ordering:
-    1. High fraud risk (score >= 0.7)
-    2. Failed pipeline claims
-    3. Low-confidence decisions (< 0.80)
-    4. Newest within same priority tier
-    """
+    """Get claims queue for adjuster review, sorted by priority."""
     store = _get_state_store()
 
-    # Query all claims with matching status
-    # In production this would use Cosmos DB query with filters
-    # For now, return a structured response shape
     try:
-        # Use Cosmos SQL query for status filter
         container = store._get_container()
         query = "SELECT * FROM c WHERE c.status = @status ORDER BY c.updated_at DESC"
         params = [{"name": "@status", "value": status}]
@@ -64,7 +56,6 @@ async def get_adjuster_queue(
         logger.warning("Failed to query adjuster queue from Cosmos DB")
         items = []
 
-    # Parse and sort by priority
     claims: list[dict[str, Any]] = []
     for item in items:
         try:
@@ -73,7 +64,6 @@ async def get_adjuster_queue(
         except Exception:
             continue
 
-    # Priority sort
     def _priority_key(claim: dict[str, Any]) -> tuple[int, str]:
         fraud_score = 0.0
         fraud_result = claim.get("fraud_result")
@@ -94,7 +84,6 @@ async def get_adjuster_queue(
 
     claims.sort(key=_priority_key)
 
-    # Paginate
     start = (page - 1) * page_size
     paginated = claims[start : start + page_size]
 
@@ -111,10 +100,7 @@ async def get_session_url(
     claim_id: str = Query(..., description="Claim ID to start session for"),
     adjuster_id: str = Query("default-adjuster", description="Adjuster identifier"),
 ) -> Any:
-    """Get a Voice Live session URL and token for an adjuster.
-
-    Returns session metadata needed to establish a WebSocket connection.
-    """
+    """Get a Voice Live session URL and token for an adjuster."""
     service = _get_voice_service()
     try:
         session = service.create_adjuster_session(claim_id, adjuster_id)
@@ -127,58 +113,279 @@ async def get_session_url(
 async def voice_websocket(websocket: WebSocket, claim_id: str) -> None:
     """WebSocket endpoint for Voice Live adjuster sessions.
 
-    Relays audio/text events between the browser and the Voice Live service.
-    Handles tool calls inline by dispatching to ClaimLookupTool.
+    When Voice Live is configured, acts as a bidirectional relay between
+    the browser and Azure Voice Live. Falls back to text-only mode otherwise.
     """
     await websocket.accept()
-    service = _get_voice_service()
+
+    settings = get_settings()
+    voice_live_configured = bool(settings.voice_live_endpoint)
 
     # Validate claim exists
-    try:
-        session = service.create_adjuster_session(claim_id)
-    except ValueError:
+    lookup = _get_lookup_tool()
+    claim_result = lookup.get_claim_summary(claim_id)
+    if not claim_result.found:
         await websocket.close(code=4004, reason=f"Claim {claim_id} not found")
         return
 
-    # Send session config to client
-    config = service.build_session_config(claim_id)
-    await websocket.send_json({
-        "type": "session.config",
-        "session_id": session.session_id,
-        "config": config.model_dump(),
-    })
+    # Try to connect to Voice Live
+    bridge: VoiceLiveBridge | None = None
+    voice_live_available = False
 
-    logger.info("Voice session started: claim=%s session=%s", claim_id, session.session_id)
+    if voice_live_configured:
+        try:
+            bridge = VoiceLiveBridge(claim_id, lookup)
+            await bridge.connect(settings)
+            voice_live_available = True
+        except Exception:
+            logger.warning(
+                "Voice Live connect failed for claim=%s, using text fallback",
+                claim_id, exc_info=True,
+            )
+            bridge = None
 
-    try:
-        while True:
-            # Receive raw message from browser
-            data = await websocket.receive_text()
+    # Send session config to browser
+    if voice_live_available and bridge is not None:
+        await websocket.send_json({
+            "type": "session.config",
+            "session_id": bridge.session_id,
+            "mode": "voice_live",
+            "audio_enabled": True,
+            "text_fallback_enabled": True,
+        })
+        logger.info("Voice Live session started: claim=%s session=%s", claim_id, bridge.session_id)
+    else:
+        await websocket.send_json({
+            "type": "session.config",
+            "session_id": "text-fallback",
+            "mode": "text_fallback",
+            "audio_enabled": False,
+            "text_fallback_enabled": True,
+            "warning": "Voice Live is not configured; text fallback is active.",
+        })
+        logger.info("Text fallback session started: claim=%s", claim_id)
+
+    # Enter appropriate loop
+    if voice_live_available and bridge is not None:
+        await _voice_live_relay(websocket, bridge, claim_id)
+    else:
+        await _text_fallback_loop(websocket, claim_id)
+
+
+async def _voice_live_relay(
+    websocket: WebSocket, bridge: VoiceLiveBridge, claim_id: str,
+) -> None:
+    """Bidirectional relay between browser and Azure Voice Live."""
+    stop = asyncio.Event()
+
+    async def browser_to_vl() -> None:
+        """Forward browser messages to Voice Live."""
+        while not stop.is_set():
             try:
-                event = json.loads(data)
-            except json.JSONDecodeError:
-                await websocket.send_json({"type": "error", "message": "Invalid JSON"})
+                message = await websocket.receive()
+            except Exception:
+                stop.set()
+                break
+
+            if "bytes" in message:
+                await bridge.send_audio(message["bytes"])
                 continue
 
-            # Process event through Voice Live service
-            response = service.process_voice_event(event)
-            if response is not None:
-                await websocket.send_json(response.data)
+            text = message.get("text", "")
+            try:
+                event = json.loads(text)
+            except json.JSONDecodeError:
+                continue
+
+            if event.get("type") == "text.input":
+                await bridge.send_text(event.get("text", ""))
+
+    async def vl_to_browser() -> None:
+        """Forward Voice Live events to browser, handle tool calls."""
+        while not stop.is_set():
+            try:
+                event = await bridge.recv_event()
+            except websockets.ConnectionClosed:
+                break
+            except Exception:
+                logger.exception("Voice Live recv error: claim=%s", claim_id)
+                break
+
+            event_type = event.get("type", "")
+
+            # Handle function calls locally
+            if event_type == "response.function_call_arguments.done":
+                try:
+                    await bridge.handle_function_call(event)
+                except Exception:
+                    logger.exception("Tool call error: claim=%s", claim_id)
+                continue
+
+            # Normalize user speech transcription events
+            if event_type == "conversation.item.input_audio_transcription.completed":
+                text = event.get("transcript", "")
+                if text:
+                    try:
+                        await websocket.send_json({
+                            "type": "transcript.user",
+                            "text": text,
+                            "item_id": event.get("item_id", ""),
+                        })
+                    except Exception:
+                        stop.set()
+                        break
+                continue
+
+            if event_type == "conversation.item.input_audio_transcription.delta":
+                try:
+                    await websocket.send_json({
+                        "type": "transcript.user.delta",
+                        "delta": event.get("delta", ""),
+                        "item_id": event.get("item_id", ""),
+                    })
+                except Exception:
+                    stop.set()
+                    break
+                continue
+
+            if event_type == "conversation.item.input_audio_transcription.failed":
+                logger.warning(
+                    "Input transcription failed: %s",
+                    event.get("error", {}).get("message", "unknown"),
+                )
+                continue
+
+            # Forward speech detection as normalized events
+            if event_type == "input_audio_buffer.speech_started":
+                try:
+                    await websocket.send_json({"type": "speech.started"})
+                except Exception:
+                    stop.set()
+                    break
+                continue
+
+            if event_type == "input_audio_buffer.speech_stopped":
+                try:
+                    await websocket.send_json({"type": "speech.stopped"})
+                except Exception:
+                    stop.set()
+                    break
+                continue
+
+            # Forward everything else to browser
+            try:
+                await websocket.send_json(event)
+            except Exception:
+                stop.set()
+                break
+
+    task_b2v = asyncio.create_task(browser_to_vl())
+    task_v2b = asyncio.create_task(vl_to_browser())
+
+    try:
+        done, _ = await asyncio.wait(
+            [task_b2v, task_v2b],
+            return_when=asyncio.FIRST_EXCEPTION,
+        )
+        for t in done:
+            if t.exception() and not isinstance(t.exception(), (WebSocketDisconnect, websockets.ConnectionClosed)):
+                logger.exception("Relay task error: claim=%s", claim_id)
+    except WebSocketDisconnect:
+        logger.info("Browser disconnected from Voice Live: claim=%s", claim_id)
+    except Exception:
+        logger.exception("Voice Live relay error: claim=%s", claim_id)
+    finally:
+        stop.set()
+        task_b2v.cancel()
+        task_v2b.cancel()
+        await bridge.close()
+
+
+async def _text_fallback_loop(websocket: WebSocket, claim_id: str) -> None:
+    """Text-only fallback loop for when Voice Live is unavailable."""
+    audio_warned = False
+    try:
+        while True:
+            message = await websocket.receive()
+
+            if "bytes" in message:
+                if not audio_warned:
+                    audio_warned = True
+                    await websocket.send_json({
+                        "type": "warning",
+                        "message": "Audio streaming unavailable; use text fallback.",
+                    })
+                continue
+
+            text = message.get("text", "")
+            try:
+                event = json.loads(text)
+            except json.JSONDecodeError:
+                await websocket.send_json({
+                    "type": "error",
+                    "recoverable": True,
+                    "message": "Invalid JSON",
+                })
+                continue
+
+            if event.get("type") == "text.input":
+                await _handle_text_fallback(websocket, claim_id, event.get("text", ""))
 
     except WebSocketDisconnect:
-        logger.info("Voice session ended: claim=%s session=%s", claim_id, session.session_id)
+        logger.info("Text fallback session ended: claim=%s", claim_id)
     except Exception:
-        logger.exception("Voice session error: claim=%s", claim_id)
-        await websocket.close(code=1011, reason="Internal error")
+        logger.exception("Text fallback error: claim=%s", claim_id)
+        try:
+            await websocket.close(code=1011, reason="Internal error")
+        except Exception:
+            pass
+
+
+async def _handle_text_fallback(websocket: WebSocket, claim_id: str, text: str) -> None:
+    """Handle a text input message in fallback mode by querying claim tools."""
+    lookup = _get_lookup_tool()
+    text_lower = text.lower()
+
+    try:
+        if "fraud" in text_lower or "risk" in text_lower:
+            result = lookup.get_fraud_score(claim_id)
+            await websocket.send_json({
+                "type": "transcript",
+                "role": "assistant",
+                "text": f"Fraud Score: {result.summary}",
+            })
+        elif "damage" in text_lower or "assessment" in text_lower or "repair" in text_lower:
+            result = lookup.get_damage_assessment(claim_id)
+            await websocket.send_json({
+                "type": "transcript",
+                "role": "assistant",
+                "text": f"Damage Assessment: {result.summary}",
+            })
+        elif "decision" in text_lower or "reason" in text_lower or "why" in text_lower:
+            result = lookup.get_decision_reasoning(claim_id)
+            await websocket.send_json({
+                "type": "transcript",
+                "role": "assistant",
+                "text": f"Decision Reasoning: {result.summary}",
+            })
+        else:
+            result = lookup.get_claim_summary(claim_id)
+            await websocket.send_json({
+                "type": "transcript",
+                "role": "assistant",
+                "text": f"Claim Summary: {result.summary}",
+            })
+    except Exception:
+        logger.exception("Text fallback lookup failed: claim=%s", claim_id)
+        await websocket.send_json({
+            "type": "error",
+            "message": f"Failed to look up claim data: {text[:100]}",
+        })
 
 
 @router.get("/claim/{claim_id}", response_model=ClaimLookupResult)
 async def get_claim_context(claim_id: str) -> Any:
-    """Preload claim context for the adjuster interface.
-
-    Returns a structured summary of the claim for display before
-    starting a voice session.
-    """
+    """Preload claim context for the adjuster interface."""
     tool = _get_lookup_tool()
     result = tool.get_claim_summary(claim_id)
     if not result.found:

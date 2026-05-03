@@ -3,7 +3,7 @@ param projectName string
 param environment string
 param tags object = {}
 
-var storageAccountName = '${projectName}${environment}st${uniqueString(resourceGroup().id)}'
+var storageAccountName = '${take(projectName, 4)}${environment}st${take(uniqueString(resourceGroup().id), 10)}'
 
 resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   name: storageAccountName

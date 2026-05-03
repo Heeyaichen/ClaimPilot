@@ -94,7 +94,7 @@ export interface QueueClaim {
   submitted_at: string;
   updated_at: string;
   fraud_result: { score: number; flags: string[]; recommendation: string } | null;
-  decision_result: { decision: string; confidence: number } | null;
+  decision_result: { decision: string; confidence: number; escalation_reason?: string } | null;
 }
 
 export interface AdjusterQueueResponse {

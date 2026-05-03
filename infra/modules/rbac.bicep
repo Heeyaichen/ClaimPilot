@@ -27,7 +27,7 @@ resource rbacStorageBlobContributor 'Microsoft.Authorization/roleAssignments@202
 }
 
 resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' existing = {
-  name: '${projectName}${environment}st${uniqueString(resourceGroup().id)}'
+  name: '${take(projectName, 4)}${environment}st${take(uniqueString(resourceGroup().id), 10)}'
 }
 
 // Key Vault Secrets User

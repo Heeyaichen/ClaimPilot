@@ -86,6 +86,8 @@ class ClassifierAgent:
                 context=evidence,
             )
         except AgentResponseError:
+            if not self._use_stubs:
+                raise
             logger.exception("ClassifierAgent failed, falling back to stub")
             return self._stub_classify(doc_extraction)
 

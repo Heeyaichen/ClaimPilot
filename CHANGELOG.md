@@ -57,9 +57,33 @@ All notable changes to ClaimPilot are documented here.
 - Architecture diagram source (Mermaid)
 - 171+ unit tests, ruff clean, frontend builds
 
+## [v1.0.0] — Live Azure Validation
+
+### Container Apps Deployment (PR #6)
+- Azure Container Apps deployment mode (API + Worker + Frontend) in swedencentral
+- linux/amd64 Docker image fix for Apple Silicon dev machines
+- Foundry agents enabled via OpenAI Assistants API (GPT-4o)
+  - 4 persistent assistants: Classifier, Extractor, Fraud Detection, Decision
+  - Agent client switched from azure-ai-projects to openai.AzureOpenAI
+  - `CLAIMPILOT_USE_STUBS=0` — real agent calls confirmed in production logs
+- Cosmos DB RBAC fixed (Built-in Data Contributor for managed identities)
+- Demo data pack: 3 deterministic synthetic claim bundles for frontend testing
+- 198 unit tests passing
+- Live E2E validated: 202 Accepted → APPROVED with traceable reasoning chain
+- Deployment docs: `docs/deployment/v1.0.0-containerapps-live-validation.md`
+
+### Known Limitations
+- S0 rate limits may force agent fallback to stubs under load (~20 TPM)
+- Ingestion services (Doc Intelligence, Content Understanding) use stub outputs
+- Container Apps is a deployment adapter — subscription cannot create Microsoft.Web resources
+- Foundry project ARM creation intermittent in swedencentral
+
 ## Release Checklist
 
-- [ ] PR #5 merged to main
-- [ ] All tests passing (ruff, pytest, frontend build)
-- [ ] README evaluation results match latest.json
-- [ ] Tag v1.0.0
+- [x] PR #5 merged to main
+- [x] PR #6 merged to main
+- [x] All tests passing (ruff, pytest, frontend build)
+- [x] README evaluation results match latest.json
+- [x] Live E2E validation on Azure
+- [x] Real Foundry agents confirmed working
+- [ ] Tag v1.0.1 (optional — recommended for deployment adapter + real agents)

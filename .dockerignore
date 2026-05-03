@@ -1,0 +1,13 @@
+.venv/
+node_modules/
+__pycache__/
+*.pyc
+.git/
+.azure/
+.env
+*.egg-info/
+dist/
+build/
+.next/
+frontend/node_modules/
+evaluation/datasets/

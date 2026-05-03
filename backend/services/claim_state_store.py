@@ -66,12 +66,20 @@ class ClaimStateStore:
         return record
 
     def get_claim(self, claim_id: str) -> ClaimRecord | None:
-        """Retrieve a claim record by ID."""
+        """Retrieve a claim record by ID using cross-partition query."""
         try:
-            item = self._get_container().read_item(
-                item=claim_id, partition_key=claim_id
+            query = "SELECT * FROM c WHERE c.claim_id = @claim_id"
+            params = [{"name": "@claim_id", "value": claim_id}]
+            items = list(
+                self._get_container().query_items(
+                    query=query,
+                    parameters=params,
+                    enable_cross_partition_query=True,
+                )
             )
-            return ClaimRecord.model_validate(item)
+            if not items:
+                return None
+            return ClaimRecord.model_validate(items[0])
         except Exception:
             logger.warning("Claim %s not found", claim_id)
             return None
@@ -118,13 +126,20 @@ class ClaimStateStore:
         logger.info("Updated claim %s step %s → %s", claim_id, step.value, status.value)
         return record
 
-    def mark_claim_status(self, claim_id: str, status: ClaimStatus) -> ClaimRecord | None:
-        """Update only the top-level claim status."""
+    def mark_claim_status(
+        self,
+        claim_id: str,
+        status: ClaimStatus,
+        decision_result: dict[str, Any] | None = None,
+    ) -> ClaimRecord | None:
+        """Update the top-level claim status and optional decision_result."""
         record = self.get_claim(claim_id)
         if record is None:
             return None
         record.status = status
         record.updated_at = datetime.utcnow()
+        if decision_result is not None:
+            record.decision_result = decision_result
         self._get_container().upsert_item(body=record.model_dump(mode="json"))
         logger.info("Marked claim %s → %s", claim_id, status.value)
         return record

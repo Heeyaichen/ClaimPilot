@@ -126,6 +126,27 @@ class AdjudicationDecision(BaseModel):
     reasoning_chain: list[ReasoningStep] = Field(default_factory=list)
 
 
+# --- Evidence consistency validation ---
+
+
+class EvidenceConsistencyResult(BaseModel):
+    """Result of cross-validating submitted, extracted, and policy evidence."""
+
+    claimant_name_submitted: str = ""
+    claimant_name_extracted: str | None = None
+    policy_number_submitted: str = ""
+    policy_number_extracted: str | None = None
+    policy_holder_from_index: str | None = None
+    policy_lookup_status: str = "unknown"  # found | not_found | unknown
+    name_match: bool = False
+    policy_match: bool = False
+    form_matches_submission: bool = False
+    image_consistency_status: str = "unknown"  # consistent | inconsistent | unknown
+    validation_errors: list[str] = Field(default_factory=list)
+    escalation_reasons: list[str] = Field(default_factory=list)
+    confidence: float = Field(ge=0.0, le=1.0, default=0.0)
+
+
 # --- Pipeline state models ---
 
 
@@ -143,10 +164,16 @@ class PipelineStepState(BaseModel):
 class ClaimRecord(BaseModel):
     """Full claim record persisted in Cosmos DB."""
 
+    model_config = {"populate_by_name": True}
+
     claim_id: str
     status: ClaimStatus = ClaimStatus.SUBMITTED
     submitted_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+    # Cosmos DB compatibility fields
+    id: str = ""  # aliases claim_id for Cosmos DB
+    policyId: str = ""  # noqa: N815 — partition key, Cosmos DB requires camelCase
 
     # File references
     form_blob_url: str | None = None
@@ -164,11 +191,19 @@ class ClaimRecord(BaseModel):
     extraction_result: dict[str, Any] | None = None
     fraud_result: dict[str, Any] | None = None
     decision_result: dict[str, Any] | None = None
+    evidence_consistency: dict[str, Any] | None = None
 
     # Metadata
     claimant_name: str = ""
     policy_number: str = ""
     pipeline_duration_seconds: float | None = None
+
+    def model_post_init(self, __context: object) -> None:
+        """Sync Cosmos DB compatibility fields after initialization."""
+        if not self.id:
+            self.id = self.claim_id
+        if not self.policyId:
+            self.policyId = self.policy_number or self.claim_id
 
 
 class ClaimSubmissionRequest(BaseModel):

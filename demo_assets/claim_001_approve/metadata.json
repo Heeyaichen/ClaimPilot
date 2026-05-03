@@ -1,0 +1,16 @@
+{
+  "claimant_name": "Maria Thompson",
+  "policy_number": "AT42093871",
+  "claim_id": "claim_001_approve",
+  "scenario": "Minor front damage \u2014 straightforward approval",
+  "expected_outcome": "APPROVED",
+  "files": {
+    "claim_form": "claim_form.pdf",
+    "photos": [
+      "photo_1.jpg",
+      "photo_2.jpg"
+    ],
+    "voice_transcript": "voice_statement.txt",
+    "audio": "optional \u2014 not included in this pack"
+  }
+}

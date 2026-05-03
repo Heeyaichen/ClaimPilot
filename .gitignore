@@ -41,6 +41,10 @@ evaluation/datasets/acord_synthetic/forms/
 evaluation/datasets/acord_synthetic/labels/
 evaluation/datasets/acord_synthetic/training/
 
+# Demo assets — keep metadata.json, voice_statement.txt, and README.md tracked
+demo_assets/*/claim_form.pdf
+demo_assets/*/*.jpg
+
 # Bicep compiled output (but allow specific JSON files)
 *.json
 !backend/domains/auto_damage/*.json
@@ -49,6 +53,8 @@ evaluation/datasets/acord_synthetic/training/
 !frontend/package-lock.json
 !frontend/tsconfig.json
 !frontend/src/**/*.json
+!demo_assets/*/metadata.json
+!demo_assets/README.md
 !frontend/next-env.d.ts
 
 # Node (for future frontend)
@@ -64,3 +70,4 @@ AGENTS.md
 CLAUDE.md
 frontend/AGENTS.md
 frontend/CLAUDE.md
+.azure/
