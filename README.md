@@ -40,6 +40,15 @@ This is not a dashboard wrapper around Azure OpenAI. It is a production-grade ag
 
 ## Architecture Overview
 
+![ClaimPilot live Azure architecture](docs/architecture/claimpilot_live_architecture.png)
+
+This diagram is generated with [`mingrammer/diagrams`](https://github.com/mingrammer/diagrams) from
+`docs/architecture/claimpilot_live_architecture.py`. It reflects the v1.0.2 live validation deployment: Next.js and
+FastAPI on Azure Container Apps, Service Bus worker orchestration, Azure AI Foundry agents, Voice Live, Document
+Intelligence, Foundry Vision image analysis, Azure AI Search, Cosmos DB state, SignalR progress events, and platform
+services. Durable Functions remains the target production orchestrator; Container Apps is the live-validation adapter
+used for this subscription.
+
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                         INGESTION LAYER                             │
