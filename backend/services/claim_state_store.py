@@ -126,13 +126,20 @@ class ClaimStateStore:
         logger.info("Updated claim %s step %s → %s", claim_id, step.value, status.value)
         return record
 
-    def mark_claim_status(self, claim_id: str, status: ClaimStatus) -> ClaimRecord | None:
-        """Update only the top-level claim status."""
+    def mark_claim_status(
+        self,
+        claim_id: str,
+        status: ClaimStatus,
+        decision_result: dict[str, Any] | None = None,
+    ) -> ClaimRecord | None:
+        """Update the top-level claim status and optional decision_result."""
         record = self.get_claim(claim_id)
         if record is None:
             return None
         record.status = status
         record.updated_at = datetime.utcnow()
+        if decision_result is not None:
+            record.decision_result = decision_result
         self._get_container().upsert_item(body=record.model_dump(mode="json"))
         logger.info("Marked claim %s → %s", claim_id, status.value)
         return record

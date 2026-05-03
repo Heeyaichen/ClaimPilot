@@ -269,7 +269,10 @@ class ClaimOrchestrator:
                         }
                     ],
                 }
-            self._store.mark_claim_status(claim_id, ClaimStatus.ESCALATED)
+            self._store.mark_claim_status(
+                claim_id, ClaimStatus.ESCALATED,
+                decision_result=record.decision_result,
+            )
             self._emit(
                 claim_id, PipelineStep.DECIDE, "claimDecided",
                 {"outcome": "ESCALATED", "reason": str(e)},
@@ -288,7 +291,10 @@ class ClaimOrchestrator:
                     "approved_amount": None,
                     "reasoning_chain": [],
                 }
-            self._store.mark_claim_status(claim_id, ClaimStatus.ESCALATED)
+            self._store.mark_claim_status(
+                claim_id, ClaimStatus.ESCALATED,
+                decision_result=record.decision_result,
+            )
             self._emit(
                 claim_id, PipelineStep.DECIDE, "claimDecided",
                 {"outcome": "ESCALATED", "reason": "Pipeline error"},
